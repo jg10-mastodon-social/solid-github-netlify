@@ -1,4 +1,4 @@
-import { Context } from "@netlify/functions";
+import type { Config, Context } from "@netlify/functions";
 
 export default (req: Request, context: Context) => {
   const corsHeaders = getCorsHeaders(req.headers.get("Origin"));
@@ -14,7 +14,7 @@ export default (req: Request, context: Context) => {
       { headers: corsHeaders },
     );
   } catch (error) {
-    return new Response(error.toString(), {
+    return new Response(String(error), {
       status: 500,
       headers: corsHeaders,
     });
