@@ -23,14 +23,14 @@ describe('router function via netlify dev', () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, {
       method: 'OPTIONS',
       headers: {
-        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Method': 'PUT',
         'Access-Control-Request-Headers': 'Authorization, Content-Type'
       }
     })
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('POST, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature'
     )
@@ -54,22 +54,22 @@ describe('router function via netlify dev', () => {
     expect(await res.text()).toBe('GET foo / bar')
   })
 
-  it('returns "POST api / events" body for POST /api/events', async () => {
+  it('returns 401 for PUT /api/events without Authorization header', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/api/events`, {
-      method: 'POST',
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ping: 'pong' })
     })
 
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe('POST api / events')
+    expect(res.status).toBe(401)
+    expect(await res.text()).toBe('Authorization required')
   })
 
-  it('returns "POST a/b / c" for multi-segment page paths', async () => {
-    const res = await fetchWithRetry(`${devServerUrl}/a/b/c`, { method: 'POST' })
+  it('returns 401 for PUT /a/b/c without Authorization header', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/a/b/c`, { method: 'PUT' })
 
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe('POST a/b / c')
+    expect(res.status).toBe(401)
+    expect(await res.text()).toBe('Authorization required')
   })
 
   it('attaches CORS headers to GET responses', async () => {
@@ -79,7 +79,7 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('POST, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 })

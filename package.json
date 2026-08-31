@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@netlify/functions": "^6.0.0",
+    "@solid/access-token-verifier": "^2.1.2",
     "prettier": "^3.9.6"
   },
   "devDependencies": {

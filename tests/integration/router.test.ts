@@ -1,6 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Context } from '@netlify/functions'
 
+const mockVerifyDpopToken = vi.fn().mockResolvedValue({
+  success: true,
+  payload: {
+    webid: 'https://alice.example/webid#me',
+    iss: 'https://issuer.example',
+    iat: 0,
+    exp: 0,
+    client_id: 'client1'
+  }
+})
+
+vi.mock('../../src/auth.js', () => ({
+  verifyDpopToken: mockVerifyDpopToken
+}))
+
+vi.mock('../../src/config.js', () => ({
+  loadConfig: () => ({ writeWebIds: ['https://alice.example/webid#me'] })
+}))
+
 function makeContext(overrides: Partial<Context> = {}): Context {
   return {
     requestId: 'test-request-id',
@@ -29,7 +48,7 @@ describe('router OPTIONS preflight', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('POST, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature'
     )
@@ -68,26 +87,26 @@ describe('router request handling', () => {
     expect(await res.text()).toBe('GET foo / bar')
   })
 
-  it('handles POST requests and reports the method in the body', async () => {
+  it('handles PUT requests and reports the method in the body', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/api/events', {
-      method: 'POST',
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hello: 'world' })
     })
     const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
 
     expect(res.status).toBe(200)
-    expect(await res.text()).toBe('POST api / events')
+    expect(await res.text()).toBe('PUT api / events')
   })
 
   it('joins page segments with slashes for multi-segment paths', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/a/b/c', { method: 'POST' })
+    const req = new Request('http://localhost/a/b/c', { method: 'PUT' })
     const res = await handler(req, makeContext({ params: { page: 'a/b', doc: 'c' } }))
 
     expect(res.status).toBe(200)
-    expect(await res.text()).toBe('POST a/b / c')
+    expect(await res.text()).toBe('PUT a/b / c')
   })
 
   it('attaches CORS headers to non-OPTIONS responses', async () => {
@@ -99,10 +118,118 @@ describe('router request handling', () => {
     const res = await handler(req, makeContext())
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('POST, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature'
     )
+    expect(res.headers.get('Vary')).toBe('Origin')
+  })
+})
+
+describe('router PUT auth', () => {
+  beforeEach(() => {
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+  })
+
+  it('returns 401 when Authorization header is missing', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'Authorization required'
+    })
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/api/events', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
+
+    expect(res.status).toBe(401)
+    expect(await res.text()).toBe('Authorization required')
+  })
+
+  it('returns 401 when DPoP header is missing', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'DPoP header required'
+    })
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/api/events', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': 'DPoP some-token'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
+
+    expect(res.status).toBe(401)
+    expect(await res.text()).toBe('DPoP header required')
+  })
+
+  it('returns 403 when token verifies but webid is not allowed', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 403,
+      message: 'WebID not allowed'
+    })
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/api/events', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': 'DPoP token',
+        'dpop': 'dpop'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
+
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('WebID not allowed')
+  })
+
+  it('returns 200 echo when token verifies and webid is allowed', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/api/events', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': 'DPoP token',
+        'dpop': 'dpop'
+      },
+      body: JSON.stringify({ ping: 'pong' })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('PUT api / events')
+  })
+
+  it('attaches CORS headers to PUT auth-failure responses', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'Authorization required'
+    })
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/api/events', {
+      method: 'PUT',
+      headers: { Origin: 'https://example.com' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 })
