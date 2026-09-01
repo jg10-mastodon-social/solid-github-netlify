@@ -18,13 +18,15 @@ vi.mock('../../src/auth.js', () => ({
 
 const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn(() => true)
+const mockCommitFileOnBranch = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
   return {
     ...actual,
     fetchFileFromGitHub: mockFetchFileFromGitHub,
-    isPathSafe: mockIsPathSafe
+    isPathSafe: mockIsPathSafe,
+    commitFileOnBranch: mockCommitFileOnBranch
   }
 })
 
@@ -125,7 +127,7 @@ describe('router request handling', () => {
     )
   })
 
-  it('handles PUT requests and reports the method in the body', async () => {
+  it('returns 405 for PUT on a non-draft URL', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/api/events', {
       method: 'PUT',
@@ -134,17 +136,8 @@ describe('router request handling', () => {
     })
     const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
 
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe('PUT api / events')
-  })
-
-  it('joins page segments with slashes for multi-segment paths', async () => {
-    const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/a/b/c', { method: 'PUT' })
-    const res = await handler(req, makeContext({ params: { page: 'a/b', doc: 'c' } }))
-
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe('PUT a/b / c')
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 
   it('attaches CORS headers to non-OPTIONS responses', async () => {
@@ -177,6 +170,12 @@ describe('router PUT auth', () => {
         client_id: 'client1'
       }
     })
+    mockCommitFileOnBranch.mockReset()
+    mockCommitFileOnBranch.mockResolvedValue({
+      commitSha: 'c',
+      htmlUrl: 'u',
+      branch: 'api-draft'
+    })
   })
 
   it('returns 401 when Authorization header is missing', async () => {
@@ -186,7 +185,7 @@ describe('router PUT auth', () => {
       message: 'Authorization required'
     })
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/api/events', {
+    const req = new Request('http://localhost/api/history/draft/events', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -194,6 +193,7 @@ describe('router PUT auth', () => {
 
     expect(res.status).toBe(401)
     expect(await res.text()).toBe('Authorization required')
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 
   it('returns 401 when DPoP header is missing', async () => {
@@ -203,7 +203,7 @@ describe('router PUT auth', () => {
       message: 'DPoP header required'
     })
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/api/events', {
+    const req = new Request('http://localhost/api/history/draft/events', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -223,7 +223,7 @@ describe('router PUT auth', () => {
       message: 'WebID not allowed'
     })
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/api/events', {
+    const req = new Request('http://localhost/api/history/draft/events', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -237,9 +237,9 @@ describe('router PUT auth', () => {
     expect(await res.text()).toBe('WebID not allowed')
   })
 
-  it('returns 200 echo when token verifies and webid is allowed', async () => {
+  it('commits the body to the per-page draft branch and returns JSON commit info', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/api/events', {
+    const req = new Request('http://localhost/api/history/draft/events', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -251,7 +251,25 @@ describe('router PUT auth', () => {
     const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
 
     expect(res.status).toBe(200)
-    expect(await res.text()).toBe('PUT api / events')
+    expect(res.headers.get('Content-Type')).toContain('application/json')
+    const body = await res.json()
+    expect(body).toEqual({
+      commit: 'c',
+      url: 'u',
+      branch: 'api-draft',
+      path: 'api/events'
+    })
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        baseRef: 'HEAD',
+        branch: 'api-draft',
+        path: 'api/events',
+        content: Buffer.from(JSON.stringify({ ping: 'pong' })).toString('base64')
+      })
+    )
   })
 
   it('attaches CORS headers to PUT auth-failure responses', async () => {
@@ -261,7 +279,7 @@ describe('router PUT auth', () => {
       message: 'Authorization required'
     })
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/api/events', {
+    const req = new Request('http://localhost/api/history/draft/events', {
       method: 'PUT',
       headers: { Origin: 'https://example.com' }
     })
@@ -269,6 +287,26 @@ describe('router PUT auth', () => {
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Vary')).toBe('Origin')
+  })
+
+  it('propagates a 422 GitHub error from commitFileOnBranch', async () => {
+    const { GitHubApiError } = await import('../../src/github.js')
+    mockCommitFileOnBranch.mockRejectedValueOnce(new GitHubApiError('protected branch', 422))
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/api/history/draft/events', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': 'DPoP token',
+        'dpop': 'dpop'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'api', doc: 'events' } }))
+
+    expect(res.status).toBe(422)
+    expect(await res.text()).toBe('protected branch')
   })
 })
 

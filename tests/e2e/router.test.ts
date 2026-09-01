@@ -36,6 +36,15 @@ describe('router function via netlify dev', () => {
     )
   })
 
+  it('returns 204 for OPTIONS on the draft route', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/draft/bar`, {
+      method: 'OPTIONS'
+    })
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+  })
+
   it('echoes Origin on OPTIONS when provided', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, {
       method: 'OPTIONS',
@@ -53,9 +62,8 @@ describe('router function via netlify dev', () => {
     expect(res.status).toBe(500)
     expect(await res.text()).toContain('GITHUB_TOKEN is required')
   })
-
-  it('returns 401 for PUT /api/events without Authorization header', async () => {
-    const res = await fetchWithRetry(`${devServerUrl}/api/events`, {
+  it('returns 401 for PUT /foo/history/draft/bar without Authorization header', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/draft/bar`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ping: 'pong' })
@@ -64,14 +72,6 @@ describe('router function via netlify dev', () => {
     expect(res.status).toBe(401)
     expect(await res.text()).toBe('Authorization required')
   })
-
-  it('returns 401 for PUT /a/b/c without Authorization header', async () => {
-    const res = await fetchWithRetry(`${devServerUrl}/a/b/c`, { method: 'PUT' })
-
-    expect(res.status).toBe(401)
-    expect(await res.text()).toBe('Authorization required')
-  })
-
   it('attaches CORS headers to GET responses', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, {
       method: 'GET',

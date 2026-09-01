@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Context } from '@netlify/functions'
 
 vi.mock('../../src/auth.js', () => ({
-  verifyDpopToken: vi.fn()
+  verifyDpopToken: vi.fn().mockResolvedValue({
+    success: true,
+    payload: { webid: 'https://alice.example/webid#me' }
+  })
 }))
 
 const mockLoadWriteConfig = vi.fn(() => ({ writeWebIds: [] }))
@@ -25,13 +28,15 @@ vi.mock('../../src/config.js', () => ({
 
 const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn()
+const mockCommitFileOnBranch = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
   return {
     ...actual,
     fetchFileFromGitHub: mockFetchFileFromGitHub,
-    isPathSafe: mockIsPathSafe
+    isPathSafe: mockIsPathSafe,
+    commitFileOnBranch: mockCommitFileOnBranch
   }
 })
 
@@ -56,9 +61,9 @@ function makeContext(overrides: Partial<Context> = {}): Context {
 }
 
 describe('router config', () => {
-  it('declares path /:page*/:doc', async () => {
+  it('declares path /:page/:doc and /:page/history/draft/:doc', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
-    expect(config.path).toEqual(['/:page*/:doc'])
+    expect(config.path).toEqual(['/:page/:doc', '/:page/history/draft/:doc'])
   })
 
   it('accepts PUT, GET and OPTIONS methods', async () => {
@@ -144,7 +149,7 @@ describe('router GET proxies a file from GitHub', () => {
     expect(res.headers.get('Cache-Control')).toBe('private, max-age=60')
   })
 
-  it('assembles path from page and doc', async () => {
+  it('assembles path from page and doc on the published route', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
       body: textBody('ok'),
@@ -154,11 +159,29 @@ describe('router GET proxies a file from GitHub', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/a/b/c', { method: 'GET' })
-    await handler(req, makeContext({ params: { page: 'a/b', doc: 'c' } }))
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'a/b/c' })
+      expect.objectContaining({ path: 'foo/bar' })
+    )
+  })
+
+  it('uses config.githubRef as the ref on the published route', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'HEAD' })
     )
   })
 
@@ -242,5 +265,214 @@ describe('router GET proxies a file from GitHub', () => {
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('ETag')
+  })
+})
+
+describe('router GET on draft route', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  it('reads from the per-page draft branch and the same page/doc file path', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('draft content'),
+      contentType: 'text/markdown; charset=utf-8',
+      etag: 'W/"draft"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo/bar', ref: 'foo-draft' })
+    )
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('draft content')
+  })
+
+  it('returns 400 when the assembled path is unsafe on the draft route', async () => {
+    mockIsPathSafe.mockReturnValueOnce(false)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/..%2Fsecret', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: '../secret' } }))
+
+    expect(res.status).toBe(400)
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+})
+
+describe('router PUT method handling', () => {
+  beforeEach(() => {
+    mockCommitFileOnBranch.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('returns 405 when PUT is sent to a non-draft URL', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ping: 'pong' })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+})
+
+describe('router PUT commit flow', () => {
+  beforeEach(() => {
+    mockCommitFileOnBranch.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('returns 200 with JSON commit info on a successful commit', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hello: 'world' })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toContain('application/json')
+    const body = await res.json()
+    expect(body).toEqual({
+      commit: 'commit-sha',
+      url: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      path: 'foo/bar'
+    })
+  })
+
+  it('passes page/doc as path, base64 content, and the per-page branch to commitFileOnBranch', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'c',
+      htmlUrl: 'u',
+      branch: 'foo-draft'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const body = 'hello world'
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body
+    })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        baseRef: 'HEAD',
+        branch: 'foo-draft',
+        path: 'foo/bar',
+        content: Buffer.from(body).toString('base64'),
+        message: expect.stringContaining('foo/bar')
+      })
+    )
+  })
+
+  it('returns 400 when the assembled path is unsafe', async () => {
+    mockIsPathSafe.mockReturnValueOnce(false)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/..%2Fsecret', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: '../secret' } }))
+
+    expect(res.status).toBe(400)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('propagates GitHubApiError status as the response status', async () => {
+    const { GitHubApiError } = await import('../../src/github.js')
+    mockCommitFileOnBranch.mockRejectedValueOnce(
+      new GitHubApiError('branch protected', 422)
+    )
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(422)
+    expect(await res.text()).toBe('branch protected')
+  })
+
+  it('returns 502 on GitHub 5xx errors', async () => {
+    const { GitHubApiError } = await import('../../src/github.js')
+    mockCommitFileOnBranch.mockRejectedValueOnce(
+      new GitHubApiError('upstream down', 502)
+    )
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(502)
+    expect(await res.text()).toBe('upstream down')
+  })
+
+  it('returns 502 on network errors', async () => {
+    mockCommitFileOnBranch.mockRejectedValueOnce(new Error('network down'))
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(502)
+    expect(await res.text()).toBe('network down')
   })
 })
