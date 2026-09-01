@@ -23,6 +23,15 @@ export class GitHubFetchError extends Error {
   }
 }
 
+export class GitHubApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'GitHubApiError'
+    this.status = status
+  }
+}
+
 export function isPathSafe(path: string): boolean {
   if (!path) return false
   if (path.startsWith('/')) return false
@@ -39,29 +48,13 @@ export async function fetchFileFromGitHub(
 ): Promise<GitHubFileResult> {
   const ref = options.ref || 'HEAD'
   const url = buildContentsUrl(options.repo, ref, options.path)
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${options.token}`,
-    Accept: 'application/vnd.github.raw',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'solid-github-netlify'
-  }
+  const headers = jsonHeaders(options.token)
+  headers['Accept'] = 'application/vnd.github.raw'
   if (options.ifNoneMatch) {
     headers['If-None-Match'] = options.ifNoneMatch
   }
 
-  let response: Response
-  try {
-    response = await fetch(url, { method: 'GET', headers })
-  } catch (error) {
-    throw new GitHubFetchError(
-      `GitHub fetch failed: ${error instanceof Error ? error.message : String(error)}`,
-      502
-    )
-  }
-
-  if (response.status >= 500) {
-    throw new GitHubFetchError(`GitHub upstream returned ${response.status}`, 502)
-  }
+  const response = await githubFetch(url, { method: 'GET', headers }, GitHubFetchError)
 
   const body = new Uint8Array(await response.arrayBuffer())
   return {
@@ -73,10 +66,237 @@ export async function fetchFileFromGitHub(
   }
 }
 
-function buildContentsUrl(repo: string, ref: string, path: string): string {
-  const encoded = path
+function jsonHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'solid-github-netlify'
+  }
+}
+
+async function githubFetch(
+  url: string,
+  init: RequestInit,
+  Ctor: new (message: string, status: number) => Error
+): Promise<Response> {
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  } catch (error) {
+    throw new Ctor(
+      `GitHub request failed: ${error instanceof Error ? error.message : String(error)}`,
+      502
+    )
+  }
+
+  if (response.status === 404) {
+    return response
+  }
+
+  if (response.status >= 500) {
+    throw new Ctor(`GitHub upstream returned ${response.status}`, response.status)
+  }
+
+  if (response.status >= 400) {
+    const message = await response.text().catch(() => '')
+    throw new Ctor(
+      `GitHub request failed (${response.status}): ${message || response.statusText}`,
+      response.status
+    )
+  }
+
+  return response
+}
+
+export interface GetBranchRefOptions {
+  repo: string
+  token: string
+  branch: string
+}
+
+export async function getBranchRef(options: GetBranchRefOptions): Promise<string | null> {
+  const url = `https://api.github.com/repos/${options.repo}/git/ref/heads/${encodeBranch(options.branch)}`
+  const response = await githubFetch(
+    url,
+    { method: 'GET', headers: jsonHeaders(options.token) },
+    GitHubApiError
+  )
+
+  if (response.status === 404) {
+    return null
+  }
+
+  const data = (await response.json()) as { object?: { sha?: string } }
+  return data.object?.sha ?? null
+}
+
+export interface GetDefaultBranchOptions {
+  repo: string
+  token: string
+}
+
+export async function getDefaultBranch(options: GetDefaultBranchOptions): Promise<string> {
+  const url = `https://api.github.com/repos/${options.repo}`
+  const response = await githubFetch(
+    url,
+    { method: 'GET', headers: jsonHeaders(options.token) },
+    GitHubApiError
+  )
+
+  const data = (await response.json()) as { default_branch?: string }
+  if (!data.default_branch) {
+    throw new GitHubApiError('GitHub response missing default_branch', 502)
+  }
+  return data.default_branch
+}
+
+export interface CreateBranchFromShaOptions {
+  repo: string
+  token: string
+  branch: string
+  sha: string
+}
+
+export async function createBranchFromSha(options: CreateBranchFromShaOptions): Promise<void> {
+  const url = `https://api.github.com/repos/${options.repo}/git/refs`
+  const headers = jsonHeaders(options.token)
+  headers['Content-Type'] = 'application/json'
+  const body = JSON.stringify({ ref: `refs/heads/${options.branch}`, sha: options.sha })
+
+  await githubFetch(url, { method: 'POST', headers, body }, GitHubApiError)
+}
+
+export interface GetFileBlobShaOptions {
+  repo: string
+  token: string
+  ref: string
+  path: string
+}
+
+export async function getFileBlobSha(options: GetFileBlobShaOptions): Promise<string | null> {
+  const url = `https://api.github.com/repos/${options.repo}/contents/${encodePath(options.path)}?ref=${encodeURIComponent(options.ref)}`
+  const response = await githubFetch(
+    url,
+    { method: 'GET', headers: jsonHeaders(options.token) },
+    GitHubApiError
+  )
+
+  if (response.status === 404) {
+    return null
+  }
+
+  const data = (await response.json()) as { sha?: string }
+  return data.sha ?? null
+}
+
+export interface CommitFileOptions {
+  repo: string
+  token: string
+  branch: string
+  path: string
+  message: string
+  content: string
+  sha?: string
+}
+
+export interface CommitFileResult {
+  commitSha: string
+  htmlUrl: string
+}
+
+export async function commitFile(options: CommitFileOptions): Promise<CommitFileResult> {
+  const url = `https://api.github.com/repos/${options.repo}/contents/${encodePath(options.path)}`
+  const headers = jsonHeaders(options.token)
+  headers['Content-Type'] = 'application/json'
+  const body = JSON.stringify({
+    message: options.message,
+    content: options.content,
+    branch: options.branch,
+    ...(options.sha ? { sha: options.sha } : {})
+  })
+
+  const response = await githubFetch(url, { method: 'PUT', headers, body }, GitHubApiError)
+  const data = (await response.json()) as { commit?: { sha?: string; html_url?: string } }
+  const sha = data.commit?.sha
+  const htmlUrl = data.commit?.html_url
+  if (!sha || !htmlUrl) {
+    throw new GitHubApiError('GitHub response missing commit.sha/html_url', 502)
+  }
+  return { commitSha: sha, htmlUrl }
+}
+
+export interface CommitFileOnBranchOptions {
+  repo: string
+  token: string
+  baseRef: string
+  branch: string
+  path: string
+  content: string
+  message: string
+}
+
+export async function commitFileOnBranch(
+  options: CommitFileOnBranchOptions
+): Promise<CommitFileResult & { branch: string }> {
+  const branchSha = await getBranchRef({
+    repo: options.repo,
+    token: options.token,
+    branch: options.branch
+  })
+
+  if (!branchSha) {
+    const baseRef = options.baseRef === 'HEAD'
+      ? await getDefaultBranch({ repo: options.repo, token: options.token })
+      : options.baseRef
+    const baseSha = await getBranchRef({
+      repo: options.repo,
+      token: options.token,
+      branch: baseRef
+    })
+    if (!baseSha) {
+      throw new GitHubApiError(`Base ref ${baseRef} not found`, 404)
+    }
+    await createBranchFromSha({
+      repo: options.repo,
+      token: options.token,
+      branch: options.branch,
+      sha: baseSha
+    })
+  }
+
+  const fileSha = await getFileBlobSha({
+    repo: options.repo,
+    token: options.token,
+    ref: options.branch,
+    path: options.path
+  })
+
+  const result = await commitFile({
+    repo: options.repo,
+    token: options.token,
+    branch: options.branch,
+    path: options.path,
+    message: options.message,
+    content: options.content,
+    ...(fileSha ? { sha: fileSha } : {})
+  })
+
+  return { ...result, branch: options.branch }
+}
+
+function encodePath(path: string): string {
+  return path.split('/').map((segment) => encodeURIComponent(segment)).join('/')
+}
+
+function encodeBranch(branch: string): string {
+  return branch
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/')
+}
+
+function buildContentsUrl(repo: string, ref: string, path: string): string {
+  const encoded = encodePath(path)
   return `https://api.github.com/repos/${repo}/contents/${encoded}?ref=${encodeURIComponent(ref)}`
 }
