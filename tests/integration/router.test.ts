@@ -75,7 +75,7 @@ describe('router OPTIONS preflight', () => {
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
     )
-    expect(res.headers.get('Access-Control-Expose-Headers')).toBe('ETag')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toBe('ETag, Cache-Control')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 
@@ -106,9 +106,10 @@ describe('router request handling', () => {
     mockFetchFileFromGitHub.mockReset()
     mockFetchFileFromGitHub.mockResolvedValue({
       status: 200,
-      body: 'from-github',
+      body: new TextEncoder().encode('from-github'),
       contentType: 'text/plain',
-      etag: null
+      etag: null,
+      cacheControl: null
     })
   })
 

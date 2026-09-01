@@ -96,8 +96,9 @@ async function handleGet(
     const headers: Record<string, string> = { ...corsHeaders };
     if (result.contentType) headers["Content-Type"] = result.contentType;
     if (result.etag) headers["ETag"] = result.etag;
+    if (result.cacheControl) headers["Cache-Control"] = result.cacheControl;
 
-    const body = result.status === 304 ? null : result.body;
+    const body = result.status === 304 ? null : (result.body as BodyInit);
     return new Response(body, {
       status: result.status,
       headers
@@ -121,7 +122,7 @@ const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Methods": "PUT, GET, OPTIONS",
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match",
-  "Access-Control-Expose-Headers": "ETag",
+  "Access-Control-Expose-Headers": "ETag, Cache-Control",
   Vary: "Origin",
 });
 

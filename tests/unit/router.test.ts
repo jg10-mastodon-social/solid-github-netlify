@@ -85,12 +85,17 @@ describe('router GET proxies a file from GitHub', () => {
     })
   })
 
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
   it('returns 200 with the upstream body and content-type', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
-      body: '# Hello',
+      body: textBody('# Hello'),
       contentType: 'text/markdown; charset=utf-8',
-      etag: 'W/"abc"'
+      etag: 'W/"abc"',
+      cacheControl: null
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
@@ -103,12 +108,49 @@ describe('router GET proxies a file from GitHub', () => {
     expect(res.headers.get('ETag')).toBe('W/"abc"')
   })
 
+  it('returns binary content without UTF-8 corruption', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0x80])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: pngBytes,
+      contentType: 'image/png',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/images/logo.png', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'images', doc: 'logo.png' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/png')
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    expect(Array.from(bytes)).toEqual(Array.from(pngBytes))
+  })
+
+  it('forwards the upstream Cache-Control header', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'text/plain',
+      etag: 'W/"abc"',
+      cacheControl: 'private, max-age=60'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.headers.get('Cache-Control')).toBe('private, max-age=60')
+  })
+
   it('assembles path from page and doc', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
-      body: 'ok',
+      body: textBody('ok'),
       contentType: 'text/plain',
-      etag: null
+      etag: null,
+      cacheControl: null
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
@@ -123,9 +165,10 @@ describe('router GET proxies a file from GitHub', () => {
   it('passes If-None-Match to GitHub and returns 304 on a 304 upstream', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 304,
-      body: '',
+      body: textBody(''),
       contentType: null,
-      etag: 'W/"abc"'
+      etag: 'W/"abc"',
+      cacheControl: null
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
@@ -145,9 +188,10 @@ describe('router GET proxies a file from GitHub', () => {
   it('returns 404 when GitHub reports a missing file', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 404,
-      body: 'Not Found',
+      body: textBody('Not Found'),
       contentType: 'text/plain',
-      etag: null
+      etag: null,
+      cacheControl: null
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
@@ -183,9 +227,10 @@ describe('router GET proxies a file from GitHub', () => {
   it('exposes ETag header via CORS', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
-      body: 'ok',
+      body: textBody('ok'),
       contentType: 'text/plain',
-      etag: 'W/"abc"'
+      etag: 'W/"abc"',
+      cacheControl: null
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')

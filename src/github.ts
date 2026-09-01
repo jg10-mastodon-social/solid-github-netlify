@@ -8,9 +8,10 @@ export interface FetchFileFromGitHubOptions {
 
 export interface GitHubFileResult {
   status: number
-  body: string
+  body: Uint8Array
   contentType: string | null
   etag: string | null
+  cacheControl: string | null
 }
 
 export class GitHubFetchError extends Error {
@@ -62,12 +63,13 @@ export async function fetchFileFromGitHub(
     throw new GitHubFetchError(`GitHub upstream returned ${response.status}`, 502)
   }
 
-  const body = await response.text()
+  const body = new Uint8Array(await response.arrayBuffer())
   return {
     status: response.status,
     body,
     contentType: response.headers.get('content-type'),
-    etag: response.headers.get('etag')
+    etag: response.headers.get('etag'),
+    cacheControl: response.headers.get('cache-control')
   }
 }
 

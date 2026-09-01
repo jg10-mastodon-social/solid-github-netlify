@@ -103,9 +103,47 @@ describe('fetchFileFromGitHub', () => {
     })
 
     expect(result.status).toBe(200)
-    expect(result.body).toBe('# Hello')
+    expect(new TextDecoder().decode(result.body)).toBe('# Hello')
     expect(result.contentType).toBe('text/markdown; charset=utf-8')
     expect(result.etag).toBe('W/"deadbeef"')
+  })
+
+  it('returns binary content as Uint8Array without UTF-8 corruption', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0x80])
+    mockFetchOnce(
+      new Response(pngBytes, {
+        status: 200,
+        headers: { 'content-type': 'image/png' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'images/logo.png'
+    })
+
+    expect(result.body).toBeInstanceOf(Uint8Array)
+    expect(Array.from(result.body)).toEqual(Array.from(pngBytes))
+  })
+
+  it('captures the upstream Cache-Control header', async () => {
+    mockFetchOnce(
+      new Response('ok', {
+        status: 200,
+        headers: { 'cache-control': 'private, max-age=60' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'foo/bar'
+    })
+
+    expect(result.cacheControl).toBe('private, max-age=60')
   })
 
   it('passes through a 404 status without throwing', async () => {
@@ -121,7 +159,7 @@ describe('fetchFileFromGitHub', () => {
     })
 
     expect(result.status).toBe(404)
-    expect(result.body).toBe('Not Found')
+    expect(new TextDecoder().decode(result.body)).toBe('Not Found')
   })
 
   it('throws GitHubFetchError on network failure', async () => {
