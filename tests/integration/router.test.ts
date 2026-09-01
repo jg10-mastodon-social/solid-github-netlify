@@ -16,8 +16,31 @@ vi.mock('../../src/auth.js', () => ({
   verifyDpopToken: mockVerifyDpopToken
 }))
 
+const mockFetchFileFromGitHub = vi.fn()
+const mockIsPathSafe = vi.fn(() => true)
+
+vi.mock('../../src/github.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/github.js')>()
+  return {
+    ...actual,
+    fetchFileFromGitHub: mockFetchFileFromGitHub,
+    isPathSafe: mockIsPathSafe
+  }
+})
+
 vi.mock('../../src/config.js', () => ({
-  loadConfig: () => ({ writeWebIds: ['https://alice.example/webid#me'] })
+  loadWriteConfig: () => ({ writeWebIds: ['https://alice.example/webid#me'] }),
+  loadGithubConfig: () => ({
+    githubRepo: 'octocat/hello-world',
+    githubToken: 'ghp_test',
+    githubRef: 'HEAD'
+  }),
+  loadConfig: () => ({
+    writeWebIds: ['https://alice.example/webid#me'],
+    githubRepo: 'octocat/hello-world',
+    githubToken: 'ghp_test',
+    githubRef: 'HEAD'
+  })
 }))
 
 function makeContext(overrides: Partial<Context> = {}): Context {
@@ -50,8 +73,9 @@ describe('router OPTIONS preflight', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature'
+      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
     )
+    expect(res.headers.get('Access-Control-Expose-Headers')).toBe('ETag')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 
@@ -78,13 +102,26 @@ describe('router OPTIONS preflight', () => {
 })
 
 describe('router request handling', () => {
-  it('returns `${method} ${page} / ${doc}` for GET /foo/bar', async () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockFetchFileFromGitHub.mockResolvedValue({
+      status: 200,
+      body: 'from-github',
+      contentType: 'text/plain',
+      etag: null
+    })
+  })
+
+  it('returns the upstream file body for GET /foo/bar', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/bar', { method: 'GET' })
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.status).toBe(200)
-    expect(await res.text()).toBe('GET foo / bar')
+    expect(await res.text()).toBe('from-github')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo/bar' })
+    )
   })
 
   it('handles PUT requests and reports the method in the body', async () => {
@@ -120,7 +157,7 @@ describe('router request handling', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature'
+      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
     )
     expect(res.headers.get('Vary')).toBe('Origin')
   })

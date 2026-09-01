@@ -13,7 +13,8 @@ export async function waitForServer(url: string, timeout: number): Promise<void>
   while (Date.now() - start < timeout) {
     try {
       const response = await fetch(`${url}/foo/bar`)
-      if (response.status === 200) {
+      // Any HTTP response means the server is up; we don't care about status code here.
+      if (response.status > 0) {
         return
       }
     } catch {}

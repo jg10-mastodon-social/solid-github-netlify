@@ -1,6 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { verifyDpopToken } from "../../../src/auth.js";
-import { loadConfig } from "../../../src/config.js";
+import { loadGithubConfig, loadWriteConfig } from "../../../src/config.js";
+import { fetchFileFromGitHub, GitHubFetchError, isPathSafe } from "../../../src/github.js";
 
 export default async (req: Request, context: Context) => {
   const corsHeaders = getCorsHeaders(req.headers.get("Origin"));
@@ -15,11 +16,20 @@ export default async (req: Request, context: Context) => {
     if (req.method === "PUT") {
       return await handlePut(req, context, corsHeaders);
     }
+    if (req.method === "GET") {
+      return await handleGet(req, context, corsHeaders);
+    }
     return new Response(
       `${req.method} ${context.params.page} / ${context.params.doc}`,
       { headers: corsHeaders },
     );
   } catch (error) {
+    if (error instanceof GitHubFetchError) {
+      return new Response(error.message, {
+        status: error.status,
+        headers: corsHeaders,
+      });
+    }
     return new Response(String(error), {
       status: 500,
       headers: corsHeaders,
@@ -32,7 +42,7 @@ async function handlePut(
   context: Context,
   corsHeaders: Record<string, string>,
 ): Promise<Response> {
-  const config = loadConfig();
+  const { writeWebIds } = loadWriteConfig();
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
 
@@ -41,7 +51,7 @@ async function handlePut(
     dpopHeader,
     req.url,
     "PUT",
-    config.writeWebIds,
+    writeWebIds,
   );
 
   if (!authResult.success) {
@@ -58,11 +68,60 @@ async function handlePut(
   );
 }
 
+async function handleGet(
+  req: Request,
+  context: Context,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  const { githubRepo, githubToken, githubRef } = loadGithubConfig();
+  const { page, doc } = context.params;
+  const path = `${page}/${doc}`;
+
+  if (!isPathSafe(path)) {
+    return new Response("Unsafe path", {
+      status: 400,
+      headers: corsHeaders,
+    });
+  }
+
+  try {
+    const result = await fetchFileFromGitHub({
+      repo: githubRepo,
+      token: githubToken,
+      ref: githubRef,
+      path,
+      ifNoneMatch: req.headers.get("if-none-match") ?? undefined
+    });
+
+    const headers: Record<string, string> = { ...corsHeaders };
+    if (result.contentType) headers["Content-Type"] = result.contentType;
+    if (result.etag) headers["ETag"] = result.etag;
+
+    const body = result.status === 304 ? null : result.body;
+    return new Response(body, {
+      status: result.status,
+      headers
+    });
+  } catch (error) {
+    const message =
+      error instanceof GitHubFetchError
+        ? error.message
+        : error instanceof Error
+        ? error.message
+        : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: corsHeaders
+    });
+  }
+}
+
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin ?? "*",
   "Access-Control-Allow-Methods": "PUT, GET, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature",
+    "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match",
+  "Access-Control-Expose-Headers": "ETag",
   Vary: "Origin",
 });
 

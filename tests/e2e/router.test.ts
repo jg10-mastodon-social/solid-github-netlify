@@ -32,7 +32,7 @@ describe('router function via netlify dev', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature'
+      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
     )
   })
 
@@ -47,11 +47,11 @@ describe('router function via netlify dev', () => {
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 
-  it('returns "GET foo / bar" body for GET /foo/bar', async () => {
+  it('returns 500 for GET /foo/bar when GITHUB_TOKEN is not configured in netlify dev', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, { method: 'GET' })
 
-    expect(res.status).toBe(200)
-    expect(await res.text()).toBe('GET foo / bar')
+    expect(res.status).toBe(500)
+    expect(await res.text()).toContain('GITHUB_TOKEN is required')
   })
 
   it('returns 401 for PUT /api/events without Authorization header', async () => {
