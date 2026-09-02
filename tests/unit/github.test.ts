@@ -117,7 +117,6 @@ describe('fetchFileFromGitHub', () => {
       new Response('# Hello', {
         status: 200,
         headers: {
-          'content-type': 'text/markdown; charset=utf-8',
           etag: 'W/"deadbeef"'
         }
       })
@@ -132,8 +131,115 @@ describe('fetchFileFromGitHub', () => {
 
     expect(result.status).toBe(200)
     expect(new TextDecoder().decode(result.body)).toBe('# Hello')
-    expect(result.contentType).toBe('text/markdown; charset=utf-8')
     expect(result.etag).toBe('W/"deadbeef"')
+  })
+
+  it('derives text/html content-type from a .html path even when upstream sends application/vnd.github.raw', async () => {
+    mockFetchOnce(
+      new Response('<html></html>', {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.raw; charset=utf-8' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'docs/index.html'
+    })
+
+    expect(result.contentType).toBe('text/html; charset=utf-8')
+  })
+
+  it('derives text/markdown content-type from a .md path', async () => {
+    mockFetchOnce(
+      new Response('# Hi', {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.raw; charset=utf-8' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'README.md'
+    })
+
+    expect(result.contentType).toBe('text/markdown; charset=utf-8')
+  })
+
+  it('derives image/png content-type from a .png path without a charset', async () => {
+    mockFetchOnce(
+      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.raw' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'images/logo.png'
+    })
+
+    expect(result.contentType).toBe('image/png')
+  })
+
+  it('falls back to the upstream content-type when the path has no extension', async () => {
+    mockFetchOnce(
+      new Response('hello', {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.raw; charset=utf-8' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'README'
+    })
+
+    expect(result.contentType).toBe('application/vnd.github.raw; charset=utf-8')
+  })
+
+  it('falls back to the upstream content-type when the file extension is unknown', async () => {
+    mockFetchOnce(
+      new Response('???', {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.raw; charset=utf-8' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'docs/note.unknownext'
+    })
+
+    expect(result.contentType).toBe('application/vnd.github.raw; charset=utf-8')
+  })
+
+  it('falls back to the upstream content-type when the extension yields no useful MIME mapping', async () => {
+    mockFetchOnce(
+      new Response('???', {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.raw; charset=utf-8' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'docs/note.unknownext'
+    })
+
+    expect(result.contentType).toBe('application/vnd.github.raw; charset=utf-8')
   })
 
   it('returns binary content as Uint8Array without UTF-8 corruption', async () => {
@@ -141,7 +247,7 @@ describe('fetchFileFromGitHub', () => {
     mockFetchOnce(
       new Response(pngBytes, {
         status: 200,
-        headers: { 'content-type': 'image/png' }
+        headers: { 'content-type': 'application/vnd.github.raw' }
       })
     )
 
@@ -154,6 +260,7 @@ describe('fetchFileFromGitHub', () => {
 
     expect(result.body).toBeInstanceOf(Uint8Array)
     expect(Array.from(result.body)).toEqual(Array.from(pngBytes))
+    expect(result.contentType).toBe('image/png')
   })
 
   it('captures the upstream Cache-Control header', async () => {

@@ -1,9 +1,28 @@
+import mime from 'mime-types'
+
 export interface FetchFileFromGitHubOptions {
   repo: string
   token: string
   ref?: string
   path: string
   ifNoneMatch?: string
+}
+
+const TEXT_MIME_TYPES = new Set([
+  'application/json',
+  'application/javascript',
+  'application/xml',
+  'application/xhtml+xml',
+  'image/svg+xml'
+])
+
+function contentTypeFromPath(path: string): string | null {
+  const type = mime.lookup(path)
+  if (!type) return null
+  if (type.startsWith('text/') || TEXT_MIME_TYPES.has(type)) {
+    return `${type}; charset=utf-8`
+  }
+  return type
 }
 
 export interface GitHubFileResult {
@@ -60,7 +79,7 @@ export async function fetchFileFromGitHub(
   return {
     status: response.status,
     body,
-    contentType: response.headers.get('content-type'),
+    contentType: contentTypeFromPath(options.path) ?? response.headers.get('content-type'),
     etag: response.headers.get('etag'),
     cacheControl: response.headers.get('cache-control')
   }

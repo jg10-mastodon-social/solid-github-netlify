@@ -133,6 +133,23 @@ describe('router GET proxies a file from GitHub', () => {
     expect(Array.from(bytes)).toEqual(Array.from(pngBytes))
   })
 
+  it('returns text/html for .html paths instead of GitHub raw content-type', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('<html></html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/index.html', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'index.html' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+  })
+
   it('forwards the upstream Cache-Control header', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
