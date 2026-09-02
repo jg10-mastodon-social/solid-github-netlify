@@ -4,9 +4,11 @@ import { loadGithubConfig, loadWriteConfig } from "../../../src/config.js";
 import {
   commitFileOnBranch,
   fetchFileFromGitHub,
+  getFileBlobSha,
   GitHubApiError,
   GitHubFetchError,
   isPathSafe,
+  parseIfMatch,
 } from "../../../src/github.js";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -20,6 +22,16 @@ function buildWacAllow(
       ? "read write"
       : "read";
   return `user="${userMode}", public="read"`;
+}
+
+function isShaMismatch(error: unknown): boolean {
+  if (!(error instanceof GitHubApiError)) return false;
+  if (error.status === 409) return true;
+  if (error.status === 422) {
+    const msg = error.message.toLowerCase();
+    return msg.includes("sha") && (msg.includes("match") || msg.includes("invalid"));
+  }
+  return false;
 }
 
 export default async (req: Request, context: Context) => {
@@ -62,6 +74,15 @@ function errorResponse(error: unknown, corsHeaders: Record<string, string>): Res
 
 function isDraftRequest(pathname: string): boolean {
   return pathname.includes(DRAFT_SUFFIX);
+}
+
+function appendVary(existing: string | undefined, value: string): string {
+  const parts = (existing ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!parts.includes(value)) parts.push(value);
+  return parts.join(", ");
 }
 
 async function handlePut(
@@ -107,11 +128,39 @@ async function handlePut(
     });
   }
 
+  const ifMatchHeader = req.headers.get("if-match");
+  const ifNoneMatchHeader = req.headers.get("if-none-match");
+  const ifMatch = parseIfMatch(ifMatchHeader);
+  const ifNoneMatchStar =
+    typeof ifNoneMatchHeader === "string" && ifNoneMatchHeader.trim() === "*";
+
+  if (ifMatch && ifNoneMatchStar) {
+    return new Response("If-Match and If-None-Match: * are mutually exclusive", {
+      status: 400,
+      headers: corsHeaders,
+    });
+  }
+
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
   const branch = `${page}-draft`;
   const body = await req.arrayBuffer();
   const content = Buffer.from(body).toString("base64");
   const message = `Update ${path} via solid-github-netlify`;
+
+  if (ifNoneMatchStar) {
+    const existingSha = await getFileBlobSha({
+      repo: githubRepo,
+      token: githubToken,
+      ref: branch,
+      path,
+    }).catch(() => null);
+    if (existingSha) {
+      return new Response("Resource already exists", {
+        status: 412,
+        headers: corsHeaders,
+      });
+    }
+  }
 
   try {
     const result = await commitFileOnBranch({
@@ -122,6 +171,7 @@ async function handlePut(
       path,
       content,
       message,
+      ...(ifMatch ? { ifMatch } : {}),
     });
 
     return new Response(
@@ -130,13 +180,24 @@ async function handlePut(
         url: result.htmlUrl,
         branch: result.branch,
         path,
+        etag: result.contentSha,
       }),
       {
         status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          ETag: `"${result.contentSha}"`,
+        },
       },
     );
   } catch (error) {
+    if (isShaMismatch(error)) {
+      return new Response("If-Match failed", {
+        status: 412,
+        headers: corsHeaders,
+      });
+    }
     if (error instanceof GitHubApiError) {
       return new Response(error.message, {
         status: error.status,
@@ -201,6 +262,9 @@ async function handleGet(
     if (result.contentType) headers["Content-Type"] = result.contentType;
     if (result.etag) headers["ETag"] = result.etag;
     if (result.cacheControl) headers["Cache-Control"] = result.cacheControl;
+    if (req.headers.get("if-none-match")) {
+      headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
+    }
     if (draft) {
       headers["WAC-Allow"] = buildWacAllow(authResult, writeWebIds);
     }
@@ -228,7 +292,7 @@ const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin ?? "*",
   "Access-Control-Allow-Methods": "PUT, GET, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match",
+    "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match",
   "Access-Control-Expose-Headers": "ETag, Cache-Control, WAC-Allow",
   Vary: "Origin",
 });

@@ -75,7 +75,7 @@ describe('router OPTIONS preflight', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
+      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
     )
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('WAC-Allow')
     expect(res.headers.get('Vary')).toBe('Origin')
@@ -174,7 +174,7 @@ describe('router request handling', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
+      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
     )
     expect(res.headers.get('Vary')).toBe('Origin')
   })

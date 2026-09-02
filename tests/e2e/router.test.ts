@@ -32,7 +32,7 @@ describe('router function via netlify dev', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
+      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
     )
   })
 
@@ -115,5 +115,19 @@ describe('router function via netlify dev', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
     expect(res.headers.get('Vary')).toBe('Origin')
+  })
+
+  it('advertises If-Match in the preflight Allow-Headers', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://example.com',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'If-Match'
+      }
+    })
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('If-Match')
   })
 })

@@ -33,6 +33,7 @@ vi.mock('../../src/config.js', () => ({
 const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn()
 const mockCommitFileOnBranch = vi.fn()
+const mockGetFileBlobSha = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -40,7 +41,8 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     ...actual,
     fetchFileFromGitHub: mockFetchFileFromGitHub,
     isPathSafe: mockIsPathSafe,
-    commitFileOnBranch: mockCommitFileOnBranch
+    commitFileOnBranch: mockCommitFileOnBranch,
+    getFileBlobSha: mockGetFileBlobSha
   }
 })
 
@@ -783,5 +785,304 @@ describe('router WAC-Allow omitted on published GET', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('WAC-Allow')
+  })
+})
+
+describe('router CORS preflight advertises If-Match', () => {
+  it('includes If-Match in Access-Control-Allow-Headers on OPTIONS', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://example.com',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'If-Match'
+      }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('If-Match')
+  })
+})
+
+describe('router PUT conditional requests with If-Match', () => {
+  beforeEach(() => {
+    mockCommitFileOnBranch.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockGetFileBlobSha.mockReset()
+    mockGetFileBlobSha.mockResolvedValue(null)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('forwards a weak ETag If-Match to commitFileOnBranch as the blob SHA', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'c',
+      htmlUrl: 'u',
+      branch: 'foo-draft',
+      contentSha: 'abc'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"abc"'
+      },
+      body: '{}'
+    })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockCommitFileOnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ ifMatch: 'abc' })
+    )
+  })
+
+  it('forwards a strong ETag If-Match to commitFileOnBranch as the blob SHA', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'c',
+      htmlUrl: 'u',
+      branch: 'foo-draft',
+      contentSha: 'def'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': '"def"'
+      },
+      body: '{}'
+    })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockCommitFileOnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ ifMatch: 'def' })
+    )
+  })
+
+  it('proceeds with the commit when If-None-Match: * and the file does not exist on the draft branch', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'c',
+      htmlUrl: 'u',
+      branch: 'foo-draft',
+      contentSha: 'ghi'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-None-Match': '*'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).toHaveBeenCalled()
+  })
+
+  it('returns the new blob SHA as the ETag header on a successful PUT', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://example/commit',
+      branch: 'foo-draft',
+      contentSha: 'new-blob-sha'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('ETag')).toBe('"new-blob-sha"')
+  })
+
+  it('returns 412 Precondition Failed when commitFileOnBranch rejects with 409', async () => {
+    const { GitHubApiError } = await import('../../src/github.js')
+    mockCommitFileOnBranch.mockRejectedValueOnce(
+      new GitHubApiError('does not match', 409)
+    )
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"stale"'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(412)
+  })
+
+  it('returns 412 Precondition Failed when commitFileOnBranch rejects with 422 SHA mismatch', async () => {
+    const { GitHubApiError } = await import('../../src/github.js')
+    mockCommitFileOnBranch.mockRejectedValueOnce(
+      new GitHubApiError('sha does not match', 422)
+    )
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"stale"'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(412)
+  })
+
+  it('attaches CORS headers to the 412 Precondition Failed response', async () => {
+    const { GitHubApiError } = await import('../../src/github.js')
+    mockCommitFileOnBranch.mockRejectedValueOnce(
+      new GitHubApiError('does not match', 409)
+    )
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"stale"',
+        Origin: 'https://example.com'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(412)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('ETag')
+  })
+
+  it('returns 400 when both If-Match and If-None-Match: * are present', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"abc"',
+        'If-None-Match': '*'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(400)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 412 Precondition Failed when If-None-Match: * and the file exists on the draft branch', async () => {
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob-sha')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-None-Match': '*'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(412)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+})
+
+describe('router GET Vary header', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  it('includes Vary: If-None-Match on a 304 GET response', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 304,
+      body: textBody(''),
+      contentType: null,
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', {
+      method: 'GET',
+      headers: { 'If-None-Match': 'W/"abc"' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(304)
+    expect(res.headers.get('Vary')).toContain('If-None-Match')
+  })
+
+  it('includes Vary: If-None-Match on a 200 GET response when the client sent If-None-Match', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'text/plain',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', {
+      method: 'GET',
+      headers: { 'If-None-Match': 'W/"stale"' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Vary')).toContain('If-None-Match')
   })
 })

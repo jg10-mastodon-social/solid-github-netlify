@@ -10,6 +10,7 @@ import {
   getFileBlobSha,
   commitFile,
   commitFileOnBranch,
+  parseIfMatch,
 } from '../../src/github.js'
 
 function textResponse(body: string, init: ResponseInit = {}): Response {
@@ -587,7 +588,8 @@ describe('commitFile', () => {
     const fetchMock = mockFetchSequence([
       jsonResponse(
         {
-          commit: { sha: 'commit-sha', html_url: 'https://github.com/octocat/hello-world/commit/abc' }
+          commit: { sha: 'commit-sha', html_url: 'https://github.com/octocat/hello-world/commit/abc' },
+          content: { sha: 'new-blob-sha' }
         },
         { status: 201 }
       )
@@ -602,10 +604,9 @@ describe('commitFile', () => {
       content: Buffer.from('hello').toString('base64')
     })
 
-    expect(result).toEqual({
-      commitSha: 'commit-sha',
-      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc'
-    })
+    expect(result.commitSha).toBe('commit-sha')
+    expect(result.htmlUrl).toBe('https://github.com/octocat/hello-world/commit/abc')
+    expect(result.contentSha).toBe('new-blob-sha')
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('https://api.github.com/repos/octocat/hello-world/contents/foo/bar')
     expect(init.method).toBe('PUT')
@@ -620,7 +621,7 @@ describe('commitFile', () => {
 
   it('includes sha in the body when provided (file update)', async () => {
     mockFetchSequence([
-      jsonResponse({ commit: { sha: 'c', html_url: 'u' } }, { status: 200 })
+      jsonResponse({ commit: { sha: 'c', html_url: 'u' }, content: { sha: 'blob' } }, { status: 200 })
     ])
 
     await commitFile({
@@ -641,7 +642,7 @@ describe('commitFile', () => {
 
   it('accepts a 200 response on update (in addition to 201 on create)', async () => {
     mockFetchSequence([
-      jsonResponse({ commit: { sha: 'c', html_url: 'u' } }, { status: 200 })
+      jsonResponse({ commit: { sha: 'c', html_url: 'u' }, content: { sha: 'blob' } }, { status: 200 })
     ])
 
     const result = await commitFile({
@@ -699,7 +700,7 @@ describe('commitFileOnBranch', () => {
       jsonResponse({ object: { sha: 'branch-sha' } }, { status: 200 }), // getBranchRef
       new Response('Not Found', { status: 404 }),                       // getFileBlobSha
       jsonResponse(
-        { commit: { sha: 'commit-sha', html_url: 'https://example/commit' } },
+        { commit: { sha: 'commit-sha', html_url: 'https://example/commit' }, content: { sha: 'new-blob-sha' } },
         { status: 201 }
       ) // commitFile
     ])
@@ -714,11 +715,10 @@ describe('commitFileOnBranch', () => {
       message: 'Update foo/bar'
     })
 
-    expect(result).toEqual({
-      commitSha: 'commit-sha',
-      htmlUrl: 'https://example/commit',
-      branch: 'foo-draft'
-    })
+    expect(result.commitSha).toBe('commit-sha')
+    expect(result.htmlUrl).toBe('https://example/commit')
+    expect(result.branch).toBe('foo-draft')
+    expect(result.contentSha).toBe('new-blob-sha')
     expect(fetchMock).toHaveBeenCalledTimes(3)
     const [, fileLookupInit] = fetchMock.mock.calls[1]
     expect(fileLookupInit.method).toBe('GET')
@@ -735,7 +735,7 @@ describe('commitFileOnBranch', () => {
       jsonResponse({ object: { sha: 'main-sha' } }, { status: 200 }),   // getBranchRef (main)
       jsonResponse({}, { status: 201 }),                                  // createBranchFromSha
       new Response('Not Found', { status: 404 }),                       // getFileBlobSha (new file)
-      jsonResponse({ commit: { sha: 'c', html_url: 'u' } }, { status: 201 }) // commitFile
+      jsonResponse({ commit: { sha: 'c', html_url: 'u' }, content: { sha: 'b' } }, { status: 201 }) // commitFile
     ])
 
     await commitFileOnBranch({
@@ -762,7 +762,7 @@ describe('commitFileOnBranch', () => {
       jsonResponse({ object: { sha: 'trunk-sha' } }, { status: 200 }),  // getBranchRef (trunk)
       jsonResponse({}, { status: 201 }),                                  // createBranchFromSha
       new Response('Not Found', { status: 404 }),                       // getFileBlobSha
-      jsonResponse({ commit: { sha: 'c', html_url: 'u' } }, { status: 201 })
+      jsonResponse({ commit: { sha: 'c', html_url: 'u' }, content: { sha: 'b' } }, { status: 201 })
     ])
 
     await commitFileOnBranch({
@@ -787,7 +787,7 @@ describe('commitFileOnBranch', () => {
     const fetchMock = mockFetchSequence([
       jsonResponse({ object: { sha: 'branch-sha' } }, { status: 200 }), // getBranchRef
       jsonResponse({ sha: 'existing-file-sha' }, { status: 200 }),     // getFileBlobSha
-      jsonResponse({ commit: { sha: 'c', html_url: 'u' } }, { status: 200 })
+      jsonResponse({ commit: { sha: 'c', html_url: 'u' }, content: { sha: 'b' } }, { status: 200 })
     ])
 
     await commitFileOnBranch({
@@ -822,5 +822,124 @@ describe('commitFileOnBranch', () => {
         message: 'Update'
       })
     ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+})
+
+describe('parseIfMatch', () => {
+  it('returns null when the header is null', () => {
+    expect(parseIfMatch(null)).toBeNull()
+  })
+
+  it('returns null when the header is empty', () => {
+    expect(parseIfMatch('')).toBeNull()
+  })
+
+  it('returns the inner SHA for a strong ETag', () => {
+    expect(parseIfMatch('"abc123"')).toBe('abc123')
+  })
+
+  it('strips the W/ prefix from a weak ETag', () => {
+    expect(parseIfMatch('W/"abc123"')).toBe('abc123')
+  })
+
+  it('returns the first tag from a comma-separated list', () => {
+    expect(parseIfMatch('"first", "second"')).toBe('first')
+  })
+
+  it('returns the first tag when the list mixes weak and strong ETags', () => {
+    expect(parseIfMatch('W/"first", "second"')).toBe('first')
+  })
+
+  it('trims surrounding whitespace', () => {
+    expect(parseIfMatch('  W/"abc123"  ')).toBe('abc123')
+  })
+
+  it('returns the inner value when the ETag lacks quotes', () => {
+    expect(parseIfMatch('abc123')).toBe('abc123')
+  })
+})
+
+describe('commitFile contentSha', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('returns the new file blob SHA from content.sha in the GitHub response', async () => {
+    mockFetchSequence([
+      jsonResponse(
+        {
+          commit: { sha: 'commit-sha', html_url: 'https://example/commit' },
+          content: { sha: 'new-blob-sha' }
+        },
+        { status: 201 }
+      )
+    ])
+
+    const result = await commitFile({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'foo-draft',
+      path: 'foo/bar',
+      message: 'Update',
+      content: Buffer.from('hello').toString('base64')
+    })
+
+    expect(result.contentSha).toBe('new-blob-sha')
+  })
+
+  it('throws GitHubApiError when the response omits content.sha', async () => {
+    mockFetchSequence([
+      jsonResponse(
+        { commit: { sha: 'commit-sha', html_url: 'https://example/commit' } },
+        { status: 201 }
+      )
+    ])
+
+    await expect(
+      commitFile({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        branch: 'foo-draft',
+        path: 'foo/bar',
+        message: 'Update',
+        content: Buffer.from('hello').toString('base64')
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+})
+
+describe('commitFileOnBranch contentSha', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('returns the new file blob SHA on the result', async () => {
+    mockFetchSequence([
+      jsonResponse({ object: { sha: 'branch-sha' } }, { status: 200 }), // getBranchRef
+      new Response('Not Found', { status: 404 }),                       // getFileBlobSha
+      jsonResponse(
+        {
+          commit: { sha: 'commit-sha', html_url: 'https://example/commit' },
+          content: { sha: 'new-blob-sha' }
+        },
+        { status: 201 }
+      ) // commitFile
+    ])
+
+    const result = await commitFileOnBranch({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      baseRef: 'main',
+      branch: 'foo-draft',
+      path: 'foo/bar',
+      content: Buffer.from('hello').toString('base64'),
+      message: 'Update foo/bar'
+    })
+
+    expect(result.contentSha).toBe('new-blob-sha')
   })
 })

@@ -62,6 +62,18 @@ export function isPathSafe(path: string): boolean {
   return true
 }
 
+export function parseIfMatch(header: string | null | undefined): string | null {
+  if (!header) return null
+  const first = header.split(',')[0]?.trim()
+  if (!first) return null
+  let value = first
+  if (value.startsWith('W/')) value = value.slice(2)
+  if (value.startsWith('"') && value.endsWith('"')) {
+    value = value.slice(1, -1)
+  }
+  return value || null
+}
+
 export async function fetchFileFromGitHub(
   options: FetchFileFromGitHubOptions
 ): Promise<GitHubFileResult> {
@@ -222,6 +234,7 @@ export interface CommitFileOptions {
 export interface CommitFileResult {
   commitSha: string
   htmlUrl: string
+  contentSha: string
 }
 
 export async function commitFile(options: CommitFileOptions): Promise<CommitFileResult> {
@@ -236,13 +249,20 @@ export async function commitFile(options: CommitFileOptions): Promise<CommitFile
   })
 
   const response = await githubFetch(url, { method: 'PUT', headers, body }, GitHubApiError)
-  const data = (await response.json()) as { commit?: { sha?: string; html_url?: string } }
+  const data = (await response.json()) as {
+    commit?: { sha?: string; html_url?: string }
+    content?: { sha?: string }
+  }
   const sha = data.commit?.sha
   const htmlUrl = data.commit?.html_url
+  const contentSha = data.content?.sha
   if (!sha || !htmlUrl) {
     throw new GitHubApiError('GitHub response missing commit.sha/html_url', 502)
   }
-  return { commitSha: sha, htmlUrl }
+  if (!contentSha) {
+    throw new GitHubApiError('GitHub response missing content.sha', 502)
+  }
+  return { commitSha: sha, htmlUrl, contentSha }
 }
 
 export interface CommitFileOnBranchOptions {
@@ -253,6 +273,7 @@ export interface CommitFileOnBranchOptions {
   path: string
   content: string
   message: string
+  ifMatch?: string
 }
 
 export async function commitFileOnBranch(
@@ -291,6 +312,8 @@ export async function commitFileOnBranch(
     path: options.path
   })
 
+  const shaToSend = options.ifMatch ?? fileSha ?? undefined
+
   const result = await commitFile({
     repo: options.repo,
     token: options.token,
@@ -298,7 +321,7 @@ export async function commitFileOnBranch(
     path: options.path,
     message: options.message,
     content: options.content,
-    ...(fileSha ? { sha: fileSha } : {})
+    ...(shaToSend ? { sha: shaToSend } : {})
   })
 
   return { ...result, branch: options.branch }
