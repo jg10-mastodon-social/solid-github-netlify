@@ -709,7 +709,101 @@ describe('router WAC-Allow on draft GET', () => {
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
   })
 
-  it('includes WAC-Allow on 404 Not Found responses', async () => {
+  it('includes WAC-Allow on 404 Not Found responses (both draft and main miss)', async () => {
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody('Not Found'),
+        contentType: 'text/plain',
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody('Not Found'),
+        contentType: 'text/plain',
+        etag: null,
+        cacheControl: null
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to GITHUB_REF on draft 404 with file present on main', async () => {
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody('Not Found'),
+        contentType: 'text/plain',
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: textBody('main-content'),
+        contentType: 'text/html',
+        etag: '"abc123"',
+        cacheControl: 'max-age=60'
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/history/draft/home.html', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'blog', doc: 'home.html' } }))
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('main-content')
+    expect(res.headers.get('Content-Type')).toBe('text/html')
+    expect(res.headers.get('ETag')).toBe('"abc123"')
+    expect(res.headers.get('Cache-Control')).toBe('max-age=60')
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
+    expect(mockFetchFileFromGitHub.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ ref: 'blog-draft', path: 'blog/home.html' })
+    )
+    expect(mockFetchFileFromGitHub.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ ref: 'HEAD', path: 'blog/home.html' })
+    )
+  })
+
+  it('forwards If-None-Match to the fallback fetch on draft 404', async () => {
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody('Not Found'),
+        contentType: 'text/plain',
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: textBody('main-content'),
+        contentType: 'text/html',
+        etag: '"abc123"',
+        cacheControl: null
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/history/draft/home.html', {
+      method: 'GET',
+      headers: { 'if-none-match': '"old-sha"' }
+    })
+    await handler(req, makeContext({ params: { page: 'blog', doc: 'home.html' } }))
+
+    expect(mockFetchFileFromGitHub.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ ifNoneMatch: '"old-sha"' })
+    )
+    expect(mockFetchFileFromGitHub.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ ifNoneMatch: '"old-sha"' })
+    )
+  })
+
+  it('does not fall back on non-draft 404', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 404,
       body: textBody('Not Found'),
@@ -719,11 +813,43 @@ describe('router WAC-Allow on draft GET', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.status).toBe(404)
-    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+  })
+
+  it('emits WAC-Allow=write on fallback for authenticated allowlisted WebID', async () => {
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody('Not Found'),
+        contentType: 'text/plain',
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: textBody('main-content'),
+        contentType: 'text/html',
+        etag: '"abc123"',
+        cacheControl: null
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/history/draft/home.html', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'blog', doc: 'home.html' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
   })
 
   it('omits WAC-Allow on 400 Unsafe Path responses', async () => {

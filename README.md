@@ -62,8 +62,9 @@ Same proxy as the public route but reads `${page}-draft`. Auth is optional and o
 3. If the request carries both `Authorization` and `DPoP` headers, run `verifyDpopToken` against `WRITE_WEBIDS`:
    - **Debugging:** an auth failure logs `[router] GET ${pathname} auth failed: <message>` and, depending on the underlying verifier error, a `[auth] DENIED: …` line plus a clock-skew note if the failure was an `iat` check. The function returns 401/403 with the verifier's message; anonymous reads (no headers, or one header missing) are not rejected.
 4. Fetch the file from `${page}-draft` (same `fetchFileFromGitHub` path as above, with `If-None-Match` forwarded).
-5. Build `WAC-Allow`: `user="read write", public="read"` for an authenticated allowlisted WebID; `user="read", public="read"` for an unauthenticated/anonymous reader. The header is only emitted on draft reads.
-6. Return the body with the upstream status (304 short-circuits as above).
+5. If the upstream returns 404 (the per-page branch doesn't exist yet, or this file was never edited on the draft), transparently re-fetch from `GITHUB_REF` and use that result. The fallback's `ETag`, `Cache-Control`, and `Vary: If-None-Match` are forwarded unchanged — git blob SHAs are content-addressed, so the same content on `main` and on a freshly-created `${page}-draft` has the same SHA, and a `PUT` with `If-Match: "<etag>"` against the draft branch will be accepted. If the fallback also 404s, the caller sees 404 with `WAC-Allow`. 5xx is not retried.
+6. Build `WAC-Allow`: `user="read write", public="read"` for an authenticated allowlisted WebID; `user="read", public="read"` for an unauthenticated/anonymous reader. The header is only emitted on draft reads.
+7. Return the body with the upstream status (304 short-circuits as above).
 
 ### Draft PUT `/:page*/history/draft/:doc`
 

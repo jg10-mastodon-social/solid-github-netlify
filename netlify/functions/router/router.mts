@@ -250,13 +250,23 @@ async function handleGet(
   }
 
   try {
-    const result = await fetchFileFromGitHub({
+    let result = await fetchFileFromGitHub({
       repo: githubRepo,
       token: githubToken,
       ref,
       path,
       ifNoneMatch: req.headers.get("if-none-match") ?? undefined,
     });
+
+    if (draft && result.status === 404) {
+      result = await fetchFileFromGitHub({
+        repo: githubRepo,
+        token: githubToken,
+        ref: githubRef,
+        path,
+        ifNoneMatch: req.headers.get("if-none-match") ?? undefined,
+      });
+    }
 
     const headers: Record<string, string> = { ...corsHeaders };
     if (result.contentType) headers["Content-Type"] = result.contentType;
