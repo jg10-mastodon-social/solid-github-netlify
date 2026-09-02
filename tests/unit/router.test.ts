@@ -61,9 +61,9 @@ function makeContext(overrides: Partial<Context> = {}): Context {
 }
 
 describe('router config', () => {
-  it('declares path /:page/:doc and /:page/history/draft/:doc', async () => {
+  it('declares path /:page*/:doc and /:page*/history/draft/:doc so nested segments match', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
-    expect(config.path).toEqual(['/:page/:doc', '/:page/history/draft/:doc'])
+    expect(config.path).toEqual(['/:page*/:doc', '/:page*/history/draft/:doc'])
   })
 
   it('accepts PUT, GET and OPTIONS methods', async () => {
@@ -181,6 +181,24 @@ describe('router GET proxies a file from GitHub', () => {
 
     expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
       expect.objectContaining({ path: 'foo/bar' })
+    )
+  })
+
+  it('assembles nested segment paths from page and doc (regression: /blog/04/pantry.png)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'image/png',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/04/pantry.png', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'blog/04', doc: 'pantry.png' } }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'blog/04/pantry.png' })
     )
   })
 
@@ -319,6 +337,24 @@ describe('router GET on draft route', () => {
     )
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('draft content')
+  })
+
+  it('reads nested segment paths from the per-page draft branch (regression: /blog/04/...)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('draft content'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/04/history/draft/pantry.png', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'blog/04', doc: 'pantry.png' } }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'blog/04/pantry.png', ref: 'blog/04-draft' })
+    )
   })
 
   it('returns 400 when the assembled path is unsafe on the draft route', async () => {

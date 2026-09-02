@@ -127,6 +127,29 @@ describe('router request handling', () => {
     )
   })
 
+  it('returns the upstream file body for nested GET paths (regression: /blog/04/pantry.png)', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/04/pantry.png', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'blog/04', doc: 'pantry.png' } }))
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('from-github')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'blog/04/pantry.png', ref: 'HEAD' })
+    )
+  })
+
+  it('returns the upstream file body for nested draft GET paths', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/04/history/draft/pantry.png', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'blog/04', doc: 'pantry.png' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'blog/04/pantry.png', ref: 'blog/04-draft' })
+    )
+  })
+
   it('returns 405 for PUT on a non-draft URL', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/api/events', {

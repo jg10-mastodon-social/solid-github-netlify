@@ -45,6 +45,40 @@ describe('router function via netlify dev', () => {
     expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
   })
 
+  it('returns 204 for OPTIONS on a 3-segment path', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/bar/baz`, {
+      method: 'OPTIONS',
+      headers: {
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'Authorization, Content-Type'
+      }
+    })
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+  })
+
+  it('invokes the function for GET on a 3-segment path', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/bar/baz`, { method: 'GET' })
+
+    // Without the wildcard match the function is not invoked and Netlify returns 404.
+    // The function being invoked without GITHUB_TOKEN configured fails with a 500
+    // from the GitHub config loader.
+    expect(res.status).toBe(500)
+    expect(await res.text()).toContain('GITHUB_TOKEN is required')
+  })
+
+  it('returns 401 for PUT on a nested draft path without Authorization header', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/bar/history/draft/baz`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ping: 'pong' })
+    })
+
+    expect(res.status).toBe(401)
+    expect(await res.text()).toBe('Authorization required')
+  })
+
   it('echoes Origin on OPTIONS when provided', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, {
       method: 'OPTIONS',
