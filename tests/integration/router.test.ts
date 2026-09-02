@@ -77,7 +77,7 @@ describe('router OPTIONS preflight', () => {
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match'
     )
-    expect(res.headers.get('Access-Control-Expose-Headers')).toBe('ETag, Cache-Control')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('WAC-Allow')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Context } from '@netlify/functions'
+import { verifyDpopToken } from '../../src/auth.js'
 
 vi.mock('../../src/auth.js', () => ({
   verifyDpopToken: vi.fn().mockResolvedValue({
@@ -8,7 +9,10 @@ vi.mock('../../src/auth.js', () => ({
   })
 }))
 
-const mockLoadWriteConfig = vi.fn(() => ({ writeWebIds: [] }))
+const mockVerifyDpopToken = vi.mocked(verifyDpopToken)
+
+const mockLoadWriteConfig: ReturnType<typeof vi.fn> & ((...args: unknown[]) => { writeWebIds: string[] }) =
+  vi.fn(() => ({ writeWebIds: [] as string[] }))
 const mockLoadGithubConfig = vi.fn(() => ({
   githubRepo: 'octocat/hello-world',
   githubToken: 'ghp_test',
@@ -527,5 +531,257 @@ describe('router PUT commit flow', () => {
 
     expect(res.status).toBe(502)
     expect(await res.text()).toBe('network down')
+  })
+})
+
+describe('router WAC-Allow on draft GET', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  function okResult() {
+    return {
+      status: 200,
+      body: textBody('draft'),
+      contentType: 'text/plain',
+      etag: null as string | null,
+      cacheControl: null as string | null
+    }
+  }
+
+  it('returns WAC-Allow with user="read write" for an authenticated allowed webid', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+  })
+
+  it('returns WAC-Allow with user="read" when no Authorization header is present', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow with user="read" when no DPoP header is present', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow with user="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: true,
+      payload: {
+        webid: 'https://mallory.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow with user="read" when verifyDpopToken returns a failure result', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 403,
+      message: 'WebID not allowed'
+    })
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('does not call verifyDpopToken when neither auth header is present', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockVerifyDpopToken).not.toHaveBeenCalled()
+  })
+
+  it('passes GET as the expected method to verifyDpopToken on draft routes', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockVerifyDpopToken).toHaveBeenCalledWith(
+      'DPoP token',
+      'dpop-proof',
+      expect.any(String),
+      'GET',
+      ['https://alice.example/webid#me']
+    )
+  })
+
+  it('includes WAC-Allow on 304 Not Modified responses', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 304,
+      body: textBody(''),
+      contentType: null,
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(304)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('includes WAC-Allow on 404 Not Found responses', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody('Not Found'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('omits WAC-Allow on 400 Unsafe Path responses', async () => {
+    mockIsPathSafe.mockReturnValueOnce(false)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/..%2Fsecret', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: '../secret' } }))
+
+    expect(res.status).toBe(400)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+  })
+
+  it('omits WAC-Allow on 502 upstream error responses', async () => {
+    mockFetchFileFromGitHub.mockRejectedValueOnce(new Error('upstream down'))
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(502)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+  })
+})
+
+describe('router WAC-Allow omitted on published GET', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('does not include WAC-Allow on the published route', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('ok'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+  })
+
+  it('exposes WAC-Allow via Access-Control-Expose-Headers on the published route CORS preflight', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'OPTIONS' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('WAC-Allow')
   })
 })

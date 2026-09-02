@@ -1,5 +1,5 @@
 import type { Config, Context } from "@netlify/functions";
-import { verifyDpopToken } from "../../../src/auth.js";
+import { type AuthResponse, verifyDpopToken } from "../../../src/auth.js";
 import { loadGithubConfig, loadWriteConfig } from "../../../src/config.js";
 import {
   commitFileOnBranch,
@@ -10,6 +10,17 @@ import {
 } from "../../../src/github.js";
 
 const DRAFT_SUFFIX = "/history/draft/";
+
+function buildWacAllow(
+  authResult: AuthResponse | undefined,
+  writeWebIds: string[],
+): string {
+  const userMode =
+    authResult?.success && writeWebIds.includes(authResult.payload.webid)
+      ? "read write"
+      : "read";
+  return `user="${userMode}", public="read"`;
+}
 
 export default async (req: Request, context: Context) => {
   const corsHeaders = getCorsHeaders(req.headers.get("Origin"));
@@ -151,12 +162,30 @@ async function handleGet(
   const { page, doc } = context.params;
   const path = `${page}/${doc}`;
   const ref = isDraftRequest(pathname) ? `${page}-draft` : githubRef;
+  const draft = isDraftRequest(pathname);
 
   if (!isPathSafe(path)) {
     return new Response("Unsafe path", {
       status: 400,
       headers: corsHeaders,
     });
+  }
+
+  let authResult: AuthResponse | undefined;
+  let writeWebIds: string[] = [];
+  if (draft) {
+    const authHeader = req.headers.get("authorization") ?? undefined;
+    const dpopHeader = req.headers.get("dpop") ?? undefined;
+    if (authHeader && dpopHeader) {
+      writeWebIds = loadWriteConfig().writeWebIds;
+      authResult = await verifyDpopToken(
+        authHeader,
+        dpopHeader,
+        req.url,
+        "GET",
+        writeWebIds,
+      );
+    }
   }
 
   try {
@@ -172,6 +201,9 @@ async function handleGet(
     if (result.contentType) headers["Content-Type"] = result.contentType;
     if (result.etag) headers["ETag"] = result.etag;
     if (result.cacheControl) headers["Cache-Control"] = result.cacheControl;
+    if (draft) {
+      headers["WAC-Allow"] = buildWacAllow(authResult, writeWebIds);
+    }
 
     const body = result.status === 304 ? null : (result.body as BodyInit);
     return new Response(body, {
@@ -197,7 +229,7 @@ const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Methods": "PUT, GET, OPTIONS",
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match",
-  "Access-Control-Expose-Headers": "ETag, Cache-Control",
+  "Access-Control-Expose-Headers": "ETag, Cache-Control, WAC-Allow",
   Vary: "Origin",
 });
 
