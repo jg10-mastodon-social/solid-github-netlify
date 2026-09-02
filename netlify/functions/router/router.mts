@@ -265,6 +265,7 @@ async function handleGet(
         ref: githubRef,
         path,
         ifNoneMatch: req.headers.get("if-none-match") ?? undefined,
+        logTag: "fallback",
       });
     }
 
@@ -308,7 +309,7 @@ const getCorsHeaders = (origin: string | null) => ({
 });
 
 export const config: Config = {
-  path: ["/:page*/:doc", "/:page*/history/draft/:doc"],
+  path: ["/:page*/history/draft/:doc", "/:page*/:doc"],
   method: ["PUT", "GET", "OPTIONS"],
   preferStatic: true,
 };

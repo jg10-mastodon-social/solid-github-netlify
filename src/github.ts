@@ -6,6 +6,7 @@ export interface FetchFileFromGitHubOptions {
   ref?: string
   path: string
   ifNoneMatch?: string
+  logTag?: string
 }
 
 const TEXT_MIME_TYPES = new Set([
@@ -83,6 +84,18 @@ export async function fetchFileFromGitHub(
   headers['Accept'] = 'application/vnd.github.raw'
   if (options.ifNoneMatch) {
     headers['If-None-Match'] = options.ifNoneMatch
+  }
+
+  console.log(`[github] GET ${url}${options.logTag ? ` (${options.logTag})` : ''}`)
+
+  if (options.token === 'dummy') {
+    return {
+      status: 404,
+      body: new Uint8Array(),
+      contentType: null,
+      etag: null,
+      cacheControl: null,
+    }
   }
 
   const response = await githubFetch(url, { method: 'GET', headers }, GitHubFetchError)

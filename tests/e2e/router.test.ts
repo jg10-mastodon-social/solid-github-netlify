@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { devServerUrl } from '../helpers/dev-server.js'
+import { devServerUrl, getDevServerLogs } from '../helpers/dev-server.js'
 
 async function fetchWithRetry(
   input: string | URL,
@@ -61,11 +61,10 @@ describe('router function via netlify dev', () => {
   it('invokes the function for GET on a 3-segment path', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar/baz`, { method: 'GET' })
 
-    // Without the wildcard match the function is not invoked and Netlify returns 404.
-    // The function being invoked without GITHUB_TOKEN configured fails with a 500
-    // from the GitHub config loader.
-    expect(res.status).toBe(500)
-    expect(await res.text()).toContain('GITHUB_TOKEN is required')
+    // The function is invoked via the greedy /:page*/:doc match. With GITHUB_TOKEN=dummy
+    // set in netlify.toml, fetchFileFromGitHub runs in offline mode and returns a
+    // synthetic 404, which the router passes through.
+    expect(res.status).toBe(404)
   })
 
   it('returns 401 for PUT on a nested draft path without Authorization header', async () => {
@@ -90,11 +89,13 @@ describe('router function via netlify dev', () => {
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 
-  it('returns 500 for GET /foo/bar when GITHUB_TOKEN is not configured in netlify dev', async () => {
+  it('returns 404 for GET /foo/bar when offline mode is active', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, { method: 'GET' })
 
-    expect(res.status).toBe(500)
-    expect(await res.text()).toContain('GITHUB_TOKEN is required')
+    // GITHUB_TOKEN=dummy is set in netlify.toml [context.dev.environment], so the
+    // function proceeds past config load. fetchFileFromGitHub hits the offline
+    // bypass (token === 'dummy') and returns a synthetic 404.
+    expect(res.status).toBe(404)
   })
   it('returns 401 for PUT /foo/history/draft/bar without Authorization header', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/history/draft/bar`, {
@@ -129,5 +130,35 @@ describe('router function via netlify dev', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Headers')).toContain('If-Match')
+  })
+})
+
+describe('router route order (regression: greedy :page* must not swallow /history/draft/)', () => {
+  it('routes /foo/history/draft/bar to path=foo/bar ref=foo-draft then falls back to ref=HEAD via netlify dev', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/draft/bar`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\/bar\?ref=foo-draft\b/
+    )
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\/bar\?ref=HEAD \(fallback\)/
+    )
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('routes /foo/bar to path=foo/bar ref=HEAD via netlify dev (no fallback fires)', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/foo/bar`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\/bar\?ref=HEAD\b(?!\s*\(fallback\))/
+    )
+    expect(logs).not.toMatch(/\(fallback\)/)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
   })
 })

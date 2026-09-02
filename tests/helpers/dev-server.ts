@@ -5,8 +5,13 @@ const DEV_URL = `http://localhost:${DEV_PORT}`
 
 let serverProcess: ChildProcess | null = null
 let serverReady = false
+const capturedStdout: string[] = []
 
 export const devServerUrl = DEV_URL
+
+export function getDevServerLogs(): string {
+  return capturedStdout.join('')
+}
 
 export async function waitForServer(url: string, timeout: number): Promise<void> {
   const start = Date.now()
@@ -37,11 +42,13 @@ export async function startDevServer(): Promise<void> {
     serverProcess.stdout?.on('data', (data) => {
       const text = data.toString()
       output += text
+      capturedStdout.push(text)
       console.log(`[netlify] ${text.trim()}`)
     })
     serverProcess.stderr?.on('data', (data) => {
       const text = data.toString()
       output += text
+      capturedStdout.push(text)
       console.error(`[netlify] ${text.trim()}`)
     })
 

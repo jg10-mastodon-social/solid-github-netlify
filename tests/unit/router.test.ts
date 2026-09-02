@@ -67,9 +67,9 @@ function makeContext(overrides: Partial<Context> = {}): Context {
 }
 
 describe('router config', () => {
-  it('declares path /:page*/:doc and /:page*/history/draft/:doc so nested segments match', async () => {
+  it('declares the draft route first so greedy :page* does not swallow /history/draft/ (regression)', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
-    expect(config.path).toEqual(['/:page*/:doc', '/:page*/history/draft/:doc'])
+    expect(config.path).toEqual(['/:page*/history/draft/:doc', '/:page*/:doc'])
   })
 
   it('accepts PUT, GET and OPTIONS methods', async () => {
