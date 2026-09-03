@@ -162,3 +162,55 @@ describe('router route order (regression: greedy :page* must not swallow /histor
     expect(res.headers.get('WAC-Allow')).toBeNull()
   })
 })
+
+describe('router container listings via netlify dev', () => {
+  it('returns 404 for GET / in offline mode (dummy token, path=empty)', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/\?ref=HEAD\b/
+    )
+  })
+
+  it('returns 204 for OPTIONS /foo/ CORS preflight', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://example.com',
+        'Access-Control-Request-Method': 'GET'
+      }
+    })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
+  })
+
+  it('returns 404 for GET /foo/ in offline mode and queries path=foo ref=HEAD', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/foo/`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(res.status).toBe(404)
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\?ref=HEAD\b/
+    )
+  })
+
+  it('returns 404 for GET /foo/history/draft/ in offline mode, falling back to ref=HEAD', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/draft/`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\?ref=foo-draft\b/
+    )
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\?ref=HEAD \(fallback\)/
+    )
+  })
+})

@@ -19,6 +19,7 @@ vi.mock('../../src/auth.js', () => ({
 const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn(() => true)
 const mockCommitFileOnBranch = vi.fn()
+const mockListDirectoryFromGitHub = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -26,7 +27,8 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     ...actual,
     fetchFileFromGitHub: mockFetchFileFromGitHub,
     isPathSafe: mockIsPathSafe,
-    commitFileOnBranch: mockCommitFileOnBranch
+    commitFileOnBranch: mockCommitFileOnBranch,
+    listDirectoryFromGitHub: mockListDirectoryFromGitHub
   }
 })
 
@@ -372,5 +374,71 @@ describe('router error handling', () => {
     } finally {
       logSpy.mockRestore()
     }
+  })
+})
+
+describe('router GET container listing', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockResolvedValue({
+      status: 200,
+      entries: [
+        { name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-bar' },
+        { name: 'sub', path: 'foo/sub', type: 'dir', sha: 'sha-sub' }
+      ]
+    })
+  })
+
+  it('returns a Turtle listing for GET /foo/ with the expected triples', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    const body = await res.text()
+    expect(body).toMatch(/<>\s+a\s+ldp:BasicContainer/)
+    expect(body).toContain('<bar.txt> a ldp:Resource .')
+    expect(body).toContain('<sub/> a ldp:BasicContainer .')
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo', ref: 'HEAD' })
+    )
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('returns a Turtle listing for GET / with empty path', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '', ref: 'HEAD' })
+    )
+  })
+
+  it('reads from the per-page draft branch on GET /foo/history/draft/', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo', ref: 'foo-draft' })
+    )
+  })
+
+  it('returns 204 CORS preflight on the container route', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://example.com' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
   })
 })

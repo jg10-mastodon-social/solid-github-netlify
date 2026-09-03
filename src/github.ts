@@ -110,6 +110,63 @@ export async function fetchFileFromGitHub(
   }
 }
 
+export interface ListDirectoryFromGitHubOptions {
+  repo: string
+  token: string
+  ref?: string
+  path: string
+  logTag?: string
+}
+
+export interface GitHubDirectoryEntry {
+  name: string
+  path: string
+  type: string
+  sha: string
+}
+
+export interface GitHubDirectoryResult {
+  status: number
+  entries: GitHubDirectoryEntry[]
+}
+
+export async function listDirectoryFromGitHub(
+  options: ListDirectoryFromGitHubOptions
+): Promise<GitHubDirectoryResult> {
+  const ref = options.ref || 'HEAD'
+  const url = buildContentsUrl(options.repo, ref, options.path)
+  const headers = jsonHeaders(options.token)
+
+  console.log(`[github] GET ${url}${options.logTag ? ` (${options.logTag})` : ''}`)
+
+  if (options.token === 'dummy') {
+    return { status: 404, entries: [] }
+  }
+
+  const response = await githubFetch(url, { method: 'GET', headers }, GitHubApiError)
+  if (response.status === 404) {
+    return { status: 404, entries: [] }
+  }
+  const data = (await response.json()) as Array<{
+    name?: string
+    path?: string
+    type?: string
+    sha?: string
+  }>
+  if (!Array.isArray(data)) {
+    throw new GitHubFetchError('GitHub directory response was not an array', 502)
+  }
+  const entries: GitHubDirectoryEntry[] = data
+    .filter((e) => typeof e.name === 'string' && typeof e.path === 'string')
+    .map((e) => ({
+      name: e.name as string,
+      path: e.path as string,
+      type: typeof e.type === 'string' ? e.type : 'file',
+      sha: typeof e.sha === 'string' ? e.sha : '',
+    }))
+  return { status: response.status, entries }
+}
+
 function jsonHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,

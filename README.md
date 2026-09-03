@@ -7,10 +7,12 @@
 Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public reads from `${GITHUB_REPO}@${GITHUB_REF}`; writes go to per-page `${page}-draft` branches via Solid-OIDC-authenticated PUT.
 
 - **Public GET** `GET /:page*/:doc` — unauthenticated. Proxies `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via the GitHub Contents `application/vnd.github.raw` media type. Forwards `Content-Type` (inferred from the file extension via `mime-types`), `ETag`, and `Cache-Control`; honors `If-None-Match` (returns 304) and emits `Vary: If-None-Match` whenever the client sent one.
+- **Public container GET** `GET /`, `GET /:page*/` — unauthenticated. Lists the GitHub directory at `${GITHUB_REPO}@${GITHUB_REF}:${page}/` via the GitHub Contents `application/vnd.github+json` media type and returns a Turtle `ldp:BasicContainer` document with `ldp:contains` triples pointing to each child (children typed as `ldp:Resource` for files and `ldp:BasicContainer` for subdirectories). Content-Type is `text/turtle; charset=utf-8`. Honors `If-None-Match` (emits `Vary: If-None-Match`). PUT on container paths is rejected with 405.
 - **Draft GET** `GET /:page*/history/draft/:doc` — same proxy but reads `${page}-draft`. If `Authorization`+`DPoP` headers are present, runs `verifyDpopToken` against `WRITE_WEBIDS` and sets a `WAC-Allow` header reflecting auth state: `user="read write", public="read"` for an authenticated allowlisted WebID, `user="read", public="read"` otherwise. **Missing headers are not an error** — anonymous reads are allowed; the auth check only elevates `WAC-Allow`.
+- **Draft container GET** `GET /:page*/history/draft/` — same listing semantics as the public container route, but reads `${page}-draft` and falls back to `GITHUB_REF` on a 404 (same logic as the draft file route). Emits `WAC-Allow` on every response with the same auth state rules as draft file GETs.
 - **Draft PUT** `PUT /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Creates the `${page}-draft` branch from `GITHUB_REF` if missing, then commits the file. Honors `If-Match` (sha precondition → 412 on mismatch) and `If-None-Match: *` (create-only → 412 if the path already exists on the branch). The two are mutually exclusive — sending both returns 400.
 - **CORS** `OPTIONS` — 204 with allow-list `PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
-- **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400.
+- **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
 - **Errors** — `GitHubFetchError` (network/5xx) and `GitHubApiError` (4xx) carry the upstream status; 5xx is surfaced as 502, 4xx passes through, 404 passes through.
 
 ## Prerequisites
@@ -53,6 +55,16 @@ Unauthenticated proxy of `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}`.
 5. Add `Vary: If-None-Match` whenever the caller sent an `If-None-Match` (so CDN caches don't collapse 200 and 304 responses).
 6. Return the body with the upstream status; 304 short-circuits to an empty body. Upstream 404 passes through to the caller; 5xx is surfaced as `GitHubFetchError` → 502.
 
+### Public container GET `/`, `/:page*/`
+
+Unauthenticated listing of `${GITHUB_REPO}@${GITHUB_REF}:${page}/` as a Turtle `ldp:BasicContainer` document. The container path is derived from the URL pathname (not `context.params`, because Netlify's greedy `:page*` swallows trailing slashes into the previous segment), and an empty pathname `/` lists the repo root.
+
+1. Load `GITHUB_REPO`/`GITHUB_TOKEN`/`GITHUB_REF` from env.
+2. Detect container requests via `pathname === '/' || pathname.endsWith('/')`. The container path is the pathname stripped of leading and trailing slashes (root `/` → empty path, which `listDirectoryFromGitHub` translates to the repo-root Contents URL).
+3. `listDirectoryFromGitHub` against `https://api.github.com/repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github+json`.
+4. If upstream 404, return 404. Otherwise, serialize the entries via `serializeContainer` (see [Repository layout](#repository-layout) for an example).
+5. Set `Content-Type: text/turtle; charset=utf-8`. Add `Vary: If-None-Match` when the caller sent an `If-None-Match`. 5xx is surfaced as `GitHubFetchError` → 502; 4xx surfaces as `GitHubApiError` → 502.
+
 ### Draft GET `/:page*/history/draft/:doc`
 
 Same proxy as the public route but reads `${page}-draft`. Auth is optional and only affects the `WAC-Allow` response header.
@@ -65,6 +77,14 @@ Same proxy as the public route but reads `${page}-draft`. Auth is optional and o
 5. If the upstream returns 404 (the per-page branch doesn't exist yet, or this file was never edited on the draft), transparently re-fetch from `GITHUB_REF` and use that result. The fallback's `ETag`, `Cache-Control`, and `Vary: If-None-Match` are forwarded unchanged — git blob SHAs are content-addressed, so the same content on `main` and on a freshly-created `${page}-draft` has the same SHA, and a `PUT` with `If-Match: "<etag>"` against the draft branch will be accepted. If the fallback also 404s, the caller sees 404 with `WAC-Allow`. 5xx is not retried.
 6. Build `WAC-Allow`: `user="read write", public="read"` for an authenticated allowlisted WebID; `user="read", public="read"` for an unauthenticated/anonymous reader. The header is only emitted on draft reads.
 7. Return the body with the upstream status (304 short-circuits as above).
+
+### Draft container GET `/:page*/history/draft/`
+
+Same listing semantics as the public container route, but reads `${page}-draft` and falls back to `GITHUB_REF` on a 404 (same fallback rule as draft file GETs). The container path is derived from the URL pathname — `/:page*/history/draft/` strips the `/history/draft/` suffix and uses the remaining prefix as the directory path.
+
+1. Same auth and fallback logic as draft file GETs: `verifyDpopToken` only runs when both `Authorization` and `DPoP` headers are present, and a 404 on `${page}-draft` triggers a transparent re-fetch from `GITHUB_REF`.
+2. `WAC-Allow` is emitted on every response (200, 404, fallback) with the same `user="read write" | "read"`, `public="read"` rules as draft file GETs.
+3. On 200, the body is a Turtle `ldp:BasicContainer` document (same serializer as the public route); `Content-Type` is `text/turtle; charset=utf-8`. `Vary: If-None-Match` is added when the caller sent `If-None-Match`.
 
 ### Draft PUT `/:page*/history/draft/:doc`
 
@@ -120,10 +140,11 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 ├── src/
 │   ├── auth.ts              # DPoP token verification
 │   ├── config.ts            # Env loading (writeWebIds, githubRepo, githubToken, githubRef)
-│   └── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch
+│   ├── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch
+│   └── ldp.ts               # Minimal Turtle serializer for LDP BasicContainer listings
 ├── tests/
 │   ├── helpers/             # dev-server spawn (port 9999)
-│   ├── unit/                # auth, config, github, router
+│   ├── unit/                # auth, config, github, ldp, router
 │   ├── integration/         # Router handler tests with mocked deps
 │   └── e2e/                 # Tests against `netlify dev`
 └── LICENSE
@@ -133,8 +154,8 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 
 ### Components and trust boundaries
 
-- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in `netlify.toml`'s function `config.path` (`/:page*/:doc` and `/:page*/history/draft/:doc`); the function's exported `config.method` is `PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
-- **GitHub**: durable storage for file contents. Public reads serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`. Draft reads and all writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
+- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in the function's exported `config.path` (`/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`); the function's exported `config.method` is `PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
+- **GitHub**: durable storage for file contents. Public reads serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`. Public container listings serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`. Draft reads and all writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
 - **OIDC issuer**: any issuer can sign DPoP tokens, but only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT. On draft GET, the same allowlist gates the `WAC-Allow` upgrade — anonymous readers (no `Authorization`/`DPoP` headers) and readers with a non-allowlisted WebID both get `user="read", public="read"` (public read is always permitted); only an authenticated allowlisted WebID elevates to `user="read write", public="read"`.
 
 ### Repository layout

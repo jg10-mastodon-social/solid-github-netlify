@@ -8,8 +8,10 @@ import {
   GitHubApiError,
   GitHubFetchError,
   isPathSafe,
+  listDirectoryFromGitHub,
   parseIfMatch,
 } from "../../../src/github.js";
+import { serializeContainer } from "../../../src/ldp.js";
 
 const DRAFT_SUFFIX = "/history/draft/";
 
@@ -92,6 +94,13 @@ async function handlePut(
   pathname: string,
 ): Promise<Response> {
   if (!isDraftRequest(pathname)) {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
+
+  if (pathname.endsWith("/")) {
     return new Response("Method Not Allowed", {
       status: 405,
       headers: corsHeaders,
@@ -220,12 +229,28 @@ async function handleGet(
   pathname: string,
 ): Promise<Response> {
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
-  const { page, doc } = context.params;
-  const path = `${page}/${doc}`;
-  const ref = isDraftRequest(pathname) ? `${page}-draft` : githubRef;
+  const isContainer = pathname === "/" || pathname.endsWith("/");
   const draft = isDraftRequest(pathname);
 
-  if (!isPathSafe(path)) {
+  let path: string;
+  let ref: string;
+  if (isContainer) {
+    const stripped = pathname.replace(/\/+$/, "").replace(/^\/+/, "");
+    if (draft) {
+      const page = stripped.replace(/\/history\/draft$/, "");
+      path = page;
+      ref = `${page}-draft`;
+    } else {
+      path = stripped;
+      ref = githubRef;
+    }
+  } else {
+    const { page, doc } = context.params;
+    path = `${page}/${doc}`;
+    ref = draft ? `${page}-draft` : githubRef;
+  }
+
+  if (path !== "" && !isPathSafe(path)) {
     return new Response("Unsafe path", {
       status: 400,
       headers: corsHeaders,
@@ -249,35 +274,148 @@ async function handleGet(
     }
   }
 
-  try {
-    let result = await fetchFileFromGitHub({
-      repo: githubRepo,
-      token: githubToken,
-      ref,
+  if (isContainer) {
+    return await handleContainerGet({
+      req,
+      corsHeaders,
+      pathname,
       path,
-      ifNoneMatch: req.headers.get("if-none-match") ?? undefined,
+      ref,
+      githubRepo,
+      githubToken,
+      githubRef,
+      draft,
+      authResult,
+      writeWebIds,
+    });
+  }
+
+  return await handleFileGet({
+    req,
+    corsHeaders,
+    pathname,
+    path,
+    ref,
+    githubRepo,
+    githubToken,
+    githubRef,
+    draft,
+    authResult,
+    writeWebIds,
+  });
+}
+
+interface ContainerGetContext {
+  req: Request;
+  corsHeaders: Record<string, string>;
+  pathname: string;
+  path: string;
+  ref: string;
+  githubRepo: string;
+  githubToken: string;
+  githubRef: string;
+  draft: boolean;
+  authResult: AuthResponse | undefined;
+  writeWebIds: string[];
+}
+
+async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
+  try {
+    let result = await listDirectoryFromGitHub({
+      repo: ctx.githubRepo,
+      token: ctx.githubToken,
+      ref: ctx.ref,
+      path: ctx.path,
     });
 
-    if (draft && result.status === 404) {
-      result = await fetchFileFromGitHub({
-        repo: githubRepo,
-        token: githubToken,
-        ref: githubRef,
-        path,
-        ifNoneMatch: req.headers.get("if-none-match") ?? undefined,
+    if (ctx.draft && result.status === 404) {
+      result = await listDirectoryFromGitHub({
+        repo: ctx.githubRepo,
+        token: ctx.githubToken,
+        ref: ctx.githubRef,
+        path: ctx.path,
         logTag: "fallback",
       });
     }
 
-    const headers: Record<string, string> = { ...corsHeaders };
+    if (result.status === 404) {
+      const headers: Record<string, string> = { ...ctx.corsHeaders };
+      if (ctx.draft) {
+        headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+      }
+      return new Response("Not Found", { status: 404, headers });
+    }
+
+    const turtle = serializeContainer(ctx.pathname, result.entries);
+    const headers: Record<string, string> = {
+      ...ctx.corsHeaders,
+      "Content-Type": "text/turtle; charset=utf-8",
+    };
+    if (ctx.req.headers.get("if-none-match")) {
+      headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
+    }
+    if (ctx.draft) {
+      headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+    }
+    return new Response(turtle, { status: 200, headers });
+  } catch (error) {
+    const message =
+      error instanceof GitHubFetchError || error instanceof GitHubApiError
+        ? error.message
+        : error instanceof Error
+        ? error.message
+        : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: ctx.corsHeaders,
+    });
+  }
+}
+
+interface FileGetContext {
+  req: Request;
+  corsHeaders: Record<string, string>;
+  pathname: string;
+  path: string;
+  ref: string;
+  githubRepo: string;
+  githubToken: string;
+  githubRef: string;
+  draft: boolean;
+  authResult: AuthResponse | undefined;
+  writeWebIds: string[];
+}
+
+async function handleFileGet(ctx: FileGetContext): Promise<Response> {
+  try {
+    let result = await fetchFileFromGitHub({
+      repo: ctx.githubRepo,
+      token: ctx.githubToken,
+      ref: ctx.ref,
+      path: ctx.path,
+      ifNoneMatch: ctx.req.headers.get("if-none-match") ?? undefined,
+    });
+
+    if (ctx.draft && result.status === 404) {
+      result = await fetchFileFromGitHub({
+        repo: ctx.githubRepo,
+        token: ctx.githubToken,
+        ref: ctx.githubRef,
+        path: ctx.path,
+        ifNoneMatch: ctx.req.headers.get("if-none-match") ?? undefined,
+        logTag: "fallback",
+      });
+    }
+
+    const headers: Record<string, string> = { ...ctx.corsHeaders };
     if (result.contentType) headers["Content-Type"] = result.contentType;
     if (result.etag) headers["ETag"] = result.etag;
     if (result.cacheControl) headers["Cache-Control"] = result.cacheControl;
-    if (req.headers.get("if-none-match")) {
+    if (ctx.req.headers.get("if-none-match")) {
       headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
     }
-    if (draft) {
-      headers["WAC-Allow"] = buildWacAllow(authResult, writeWebIds);
+    if (ctx.draft) {
+      headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
     }
 
     const body = result.status === 304 ? null : (result.body as BodyInit);
@@ -294,7 +432,7 @@ async function handleGet(
         : String(error);
     return new Response(message, {
       status: 502,
-      headers: corsHeaders,
+      headers: ctx.corsHeaders,
     });
   }
 }
@@ -309,7 +447,13 @@ const getCorsHeaders = (origin: string | null) => ({
 });
 
 export const config: Config = {
-  path: ["/:page*/history/draft/:doc", "/:page*/:doc"],
+  path: [
+    "/:page*/history/draft/",
+    "/:page*/history/draft/:doc",
+    "/:page*/",
+    "/:page*/:doc",
+    "/",
+  ],
   method: ["PUT", "GET", "OPTIONS"],
   preferStatic: true,
 };

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 import {
   fetchFileFromGitHub,
+  listDirectoryFromGitHub,
   GitHubFetchError,
   GitHubApiError,
   getBranchRef,
@@ -941,5 +942,163 @@ describe('commitFileOnBranch contentSha', () => {
     })
 
     expect(result.contentSha).toBe('new-blob-sha')
+  })
+})
+
+describe('listDirectoryFromGitHub', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('GETs the contents URL with Accept: application/vnd.github+json', async () => {
+    const fetchMock = mockFetchSequence([
+      jsonResponse(
+        [
+          { name: 'a', path: 'foo/a', type: 'file', sha: 'sha-a' },
+          { name: 'b', path: 'foo/b', type: 'dir', sha: 'sha-b' }
+        ],
+        { status: 200 }
+      )
+    ])
+
+    const result = await listDirectoryFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'foo'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.entries).toEqual([
+      { name: 'a', path: 'foo/a', type: 'file', sha: 'sha-a' },
+      { name: 'b', path: 'foo/b', type: 'dir', sha: 'sha-b' }
+    ])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.github.com/repos/octocat/hello-world/contents/foo?ref=main')
+    expect(init.method).toBe('GET')
+    const headers = init.headers as Record<string, string>
+    expect(headers['Accept']).toBe('application/vnd.github+json')
+    expect(headers['Authorization']).toBe('Bearer ghp_test')
+  })
+
+  it('uses HEAD as the default ref when not provided', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listDirectoryFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      path: ''
+    })
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.github.com/repos/octocat/hello-world/contents/?ref=HEAD')
+  })
+
+  it('encodes path segments', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listDirectoryFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'docs/read me'
+    })
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.github.com/repos/octocat/hello-world/contents/docs/read%20me?ref=main')
+  })
+
+  it('returns an empty entries list with status 404 when the directory does not exist', async () => {
+    mockFetchSequence([new Response('Not Found', { status: 404 })])
+
+    const result = await listDirectoryFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'missing'
+    })
+
+    expect(result.status).toBe(404)
+    expect(result.entries).toEqual([])
+  })
+
+  it('throws GitHubApiError on network failure', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValueOnce(new Error('network down')) as unknown as typeof fetch
+
+    await expect(
+      listDirectoryFromGitHub({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        ref: 'main',
+        path: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('throws GitHubApiError on 5xx upstream', async () => {
+    mockFetchSequence([new Response('boom', { status: 502 })])
+
+    await expect(
+      listDirectoryFromGitHub({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        ref: 'main',
+        path: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('throws GitHubApiError on a 422 client error', async () => {
+    mockFetchSequence([new Response('Unprocessable', { status: 422 })])
+
+    await expect(
+      listDirectoryFromGitHub({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        ref: 'main',
+        path: 'bad..name'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('returns an empty listing (offline mode) when token is dummy', async () => {
+    const fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    const result = await listDirectoryFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'dummy',
+      ref: 'HEAD',
+      path: ''
+    })
+
+    expect(result.status).toBe(404)
+    expect(result.entries).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('preserves the entry type from GitHub (file, dir, symlink, submodule)', async () => {
+    mockFetchSequence([
+      jsonResponse(
+        [
+          { name: 'a', path: 'p/a', type: 'file', sha: 'sha-a' },
+          { name: 'b', path: 'p/b', type: 'dir', sha: 'sha-b' },
+          { name: 'c', path: 'p/c', type: 'symlink', sha: 'sha-c' },
+          { name: 'd', path: 'p/d', type: 'submodule', sha: 'sha-d' }
+        ],
+        { status: 200 }
+      )
+    ])
+
+    const result = await listDirectoryFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'p'
+    })
+
+    expect(result.entries.map((e) => e.type)).toEqual(['file', 'dir', 'symlink', 'submodule'])
   })
 })

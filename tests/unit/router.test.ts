@@ -34,6 +34,7 @@ const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn()
 const mockCommitFileOnBranch = vi.fn()
 const mockGetFileBlobSha = vi.fn()
+const mockListDirectoryFromGitHub = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -42,7 +43,8 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     fetchFileFromGitHub: mockFetchFileFromGitHub,
     isPathSafe: mockIsPathSafe,
     commitFileOnBranch: mockCommitFileOnBranch,
-    getFileBlobSha: mockGetFileBlobSha
+    getFileBlobSha: mockGetFileBlobSha,
+    listDirectoryFromGitHub: mockListDirectoryFromGitHub
   }
 })
 
@@ -69,7 +71,13 @@ function makeContext(overrides: Partial<Context> = {}): Context {
 describe('router config', () => {
   it('declares the draft route first so greedy :page* does not swallow /history/draft/ (regression)', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
-    expect(config.path).toEqual(['/:page*/history/draft/:doc', '/:page*/:doc'])
+    expect(config.path).toEqual([
+      '/:page*/history/draft/',
+      '/:page*/history/draft/:doc',
+      '/:page*/',
+      '/:page*/:doc',
+      '/'
+    ])
   })
 
   it('accepts PUT, GET and OPTIONS methods', async () => {
@@ -1210,5 +1218,252 @@ describe('router GET Vary header', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Vary')).toContain('If-None-Match')
+  })
+})
+
+describe('router GET container listing', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+    mockVerifyDpopToken.mockReset()
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: [] as string[] })
+  })
+
+  it('serves GET / as a Turtle container listing for the repo root', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'README.md', path: 'README.md', type: 'file', sha: 'sha-r' },
+        { name: 'foo', path: 'foo', type: 'dir', sha: 'sha-f' }
+      ]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    const body = await res.text()
+    expect(body).toContain('@prefix ldp: <http://www.w3.org/ns/ldp#> .')
+    expect(body).toMatch(/<>\s+a\s+ldp:BasicContainer/)
+    expect(body).toContain('<README.md> a ldp:Resource .')
+    expect(body).toContain('<foo/> a ldp:BasicContainer .')
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '', ref: 'HEAD' })
+    )
+  })
+
+  it('serves GET /foo/ as a Turtle listing for the foo directory', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-b' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo', ref: 'HEAD' })
+    )
+    const body = await res.text()
+    expect(body).toContain('<bar.txt> a ldp:Resource .')
+  })
+
+  it('serves nested container paths like /blog/04/ as Turtle', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/04/', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'blog/04' } }))
+
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'blog/04', ref: 'HEAD' })
+    )
+  })
+
+  it('serves GET /foo/history/draft/ as a Turtle listing for the foo-draft branch', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-d' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo', ref: 'foo-draft' })
+    )
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('falls back to GITHUB_REF on a 404 draft container listing', async () => {
+    mockListDirectoryFromGitHub
+      .mockResolvedValueOnce({ status: 404, entries: [] })
+      .mockResolvedValueOnce({
+        status: 200,
+        entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-m' }]
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledTimes(2)
+    expect(mockListDirectoryFromGitHub.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ ref: 'foo-draft', path: 'foo' })
+    )
+    expect(mockListDirectoryFromGitHub.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ ref: 'HEAD', path: 'foo' })
+    )
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('emits WAC-Allow with user="read write" on draft containers for an authenticated allowlisted WebID', async () => {
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+  })
+
+  it('omits WAC-Allow on the published container route', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+  })
+
+  it('returns 404 when both the draft and main listings miss', async () => {
+    mockListDirectoryFromGitHub
+      .mockResolvedValueOnce({ status: 404, entries: [] })
+      .mockResolvedValueOnce({ status: 404, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(404)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns 502 when the upstream listing throws', async () => {
+    mockListDirectoryFromGitHub.mockRejectedValueOnce(new Error('upstream down'))
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(502)
+    expect(await res.text()).toBe('upstream down')
+  })
+
+  it('returns 502 on a GitHubFetchError from the listing', async () => {
+    const { GitHubFetchError } = await import('../../src/github.js')
+    mockListDirectoryFromGitHub.mockRejectedValueOnce(new GitHubFetchError('boom', 502))
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(502)
+  })
+
+  it('returns 400 when the assembled container path is unsafe', async () => {
+    mockIsPathSafe.mockReturnValueOnce(false)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo%2F..%2F/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo/..' } }))
+
+    expect(res.status).toBe(400)
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('returns 405 for PUT on a container path (not under /history/draft/:doc)', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('includes Vary: If-None-Match on a container GET when the client sent If-None-Match', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { 'If-None-Match': 'W/"abc"' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.headers.get('Vary')).toContain('If-None-Match')
+  })
+
+  it('attaches CORS headers to the container response', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Origin: 'https://example.com' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
+    expect(res.headers.get('Vary')).toContain('Origin')
   })
 })
