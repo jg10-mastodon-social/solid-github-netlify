@@ -73,7 +73,7 @@ describe('router config', () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
     expect(config.path).toEqual([
       '/:page*/history/draft/',
-      '/:page*/history/draft/:doc',
+      '/:page*/history/draft/:doc*',
       '/:page*/',
       '/:page*/:doc',
       '/'

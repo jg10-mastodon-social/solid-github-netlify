@@ -25,6 +25,7 @@ export default defineConfig({
           include: ['tests/e2e/**/*.test.ts'],
           setupFiles: ['./tests/helpers/dev-server-setup.ts'],
           hookTimeout: 60000,
+          testTimeout: 30000,
           threads: true,
           singleThread: true,
         },

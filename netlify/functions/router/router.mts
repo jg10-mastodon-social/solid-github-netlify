@@ -455,7 +455,7 @@ const getCorsHeaders = (origin: string | null) => ({
 export const config: Config = {
   path: [
     "/:page*/history/draft/",
-    "/:page*/history/draft/:doc",
+    "/:page*/history/draft/:doc*",
     "/:page*/",
     "/:page*/:doc",
     "/",

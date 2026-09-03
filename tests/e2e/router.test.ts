@@ -161,6 +161,38 @@ describe('router route order (regression: greedy :page* must not swallow /histor
     expect(res.status).toBe(404)
     expect(res.headers.get('WAC-Allow')).toBeNull()
   })
+
+  it('routes /blog/04/history/draft/pantry.png to path=blog/04/pantry.png ref=blog/04-draft (regression: multi-segment :doc* must not be eaten by :page*)', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/blog/04/history/draft/pantry.png`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/blog\/04\/pantry\.png\?ref=blog(?:\/|%2F)04-draft\b/
+    )
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/blog\/04\/pantry\.png\?ref=HEAD \(fallback\)/
+    )
+    expect(logs).not.toMatch(/ref=blog(?:\/|%2F)04(?:\/|%2F)history(?:\/|%2F)draft(?:\/|%2F)\d+-draft/)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('routes /blog/history/draft/03/pantry.png to path=blog/03/pantry.png ref=blog-draft (regression: nested page + multi-segment :doc*)', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/blog/history/draft/03/pantry.png`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/blog\/03\/pantry\.png\?ref=blog-draft\b/
+    )
+    expect(logs).toMatch(
+      /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/blog\/03\/pantry\.png\?ref=HEAD \(fallback\)/
+    )
+    expect(logs).not.toMatch(/ref=blog\/history\/draft\/\d+-draft/)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
 })
 
 describe('router container listings via netlify dev', () => {

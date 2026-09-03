@@ -35,7 +35,8 @@ export async function startDevServer(): Promise<void> {
 
   return new Promise((resolve, reject) => {
     serverProcess = spawn('npx', ['netlify', 'dev', '--context', 'dev', '--port', String(DEV_PORT), '--offline'], {
-      stdio: 'pipe'
+      stdio: 'pipe',
+      env: { ...process.env, CHOKIDAR_USEPOLLING: 'true' }
     })
 
     let output = ''
