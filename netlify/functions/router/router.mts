@@ -234,20 +234,24 @@ async function handleGet(
 
   let path: string;
   let ref: string;
+  let containerUri: string;
   if (isContainer) {
     const stripped = pathname.replace(/\/+$/, "").replace(/^\/+/, "");
     if (draft) {
       const page = stripped.replace(/\/history\/draft$/, "");
       path = page;
       ref = `${page}-draft`;
+      containerUri = `/${page}${page ? "/" : ""}`;
     } else {
       path = stripped;
       ref = githubRef;
+      containerUri = pathname === "/" ? "/" : pathname;
     }
   } else {
     const { page, doc } = context.params;
     path = `${page}/${doc}`;
     ref = draft ? `${page}-draft` : githubRef;
+    containerUri = "";
   }
 
   if (path !== "" && !isPathSafe(path)) {
@@ -281,6 +285,7 @@ async function handleGet(
       pathname,
       path,
       ref,
+      containerUri,
       githubRepo,
       githubToken,
       githubRef,
@@ -311,6 +316,7 @@ interface ContainerGetContext {
   pathname: string;
   path: string;
   ref: string;
+  containerUri: string;
   githubRepo: string;
   githubToken: string;
   githubRef: string;
@@ -346,7 +352,7 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
       return new Response("Not Found", { status: 404, headers });
     }
 
-    const turtle = serializeContainer(ctx.pathname, result.entries);
+    const turtle = serializeContainer(ctx.containerUri, result.entries);
     const headers: Record<string, string> = {
       ...ctx.corsHeaders,
       "Content-Type": "text/turtle; charset=utf-8",

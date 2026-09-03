@@ -1312,6 +1312,51 @@ describe('router GET container listing', () => {
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
   })
 
+  it('uses the effective page URI (stripped of /history/draft/) as the Turtle subject on draft containers', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-d' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    const body = await res.text()
+    expect(body).not.toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer[^.]*<\/foo\/history\/draft\/>\s*a/m)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer[^.]*<bar\.txt>/)
+    expect(body).not.toContain('<foo/bar.txt>')
+  })
+
+  it('regression: /blog/history/draft/ lists children with the page prefix stripped (deployed-preview bug)', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: '01', path: 'blog/01', type: 'dir', sha: 'sha-1' },
+        { name: '02', path: 'blog/02', type: 'dir', sha: 'sha-2' },
+        { name: '03', path: 'blog/03', type: 'dir', sha: 'sha-3' },
+        { name: '04', path: 'blog/04', type: 'dir', sha: 'sha-4' },
+        { name: '05', path: 'blog/05', type: 'dir', sha: 'sha-5' },
+        { name: 'home.html', path: 'blog/home.html', type: 'file', sha: 'sha-h' }
+      ]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/blog/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'blog/history' } }))
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<01/> a ldp:Container, ldp:BasicContainer .')
+    expect(body).toContain('<02/> a ldp:Container, ldp:BasicContainer .')
+    expect(body).toContain('<03/> a ldp:Container, ldp:BasicContainer .')
+    expect(body).toContain('<04/> a ldp:Container, ldp:BasicContainer .')
+    expect(body).toContain('<05/> a ldp:Container, ldp:BasicContainer .')
+    expect(body).toContain('<home.html> a ldp:Resource .')
+    expect(body).not.toContain('<blog/01/>')
+    expect(body).not.toContain('<blog/home.html>')
+  })
+
   it('falls back to GITHUB_REF on a 404 draft container listing', async () => {
     mockListDirectoryFromGitHub
       .mockResolvedValueOnce({ status: 404, entries: [] })

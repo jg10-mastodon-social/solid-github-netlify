@@ -430,6 +430,22 @@ describe('router GET container listing', () => {
     )
   })
 
+  it('lists draft container children with the page prefix stripped', async () => {
+    mockListDirectoryFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-d' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    const body = await res.text()
+    expect(body).toContain('<bar.txt> a ldp:Resource .')
+    expect(body).not.toContain('<foo/bar.txt>')
+  })
+
   it('returns 204 CORS preflight on the container route', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/', {
