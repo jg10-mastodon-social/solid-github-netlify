@@ -75,7 +75,7 @@ describe('router OPTIONS preflight', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
     )
@@ -174,7 +174,7 @@ describe('router request handling', () => {
     const res = await handler(req, makeContext())
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
     )

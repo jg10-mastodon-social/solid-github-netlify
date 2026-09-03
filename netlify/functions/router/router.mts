@@ -11,6 +11,7 @@ import {
   listDirectoryFromGitHub,
   parseIfMatch,
 } from "../../../src/github.js";
+import { applyInsertOnlyTurtlePatch, PatchValidationError } from "../../../src/patch.js";
 import { serializeContainer } from "../../../src/ldp.js";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -48,6 +49,9 @@ export default async (req: Request, context: Context) => {
   try {
     if (req.method === "PUT") {
       return await handlePut(req, context, corsHeaders, pathname);
+    }
+    if (req.method === "PATCH") {
+      return await handlePatch(req, context, corsHeaders, pathname);
     }
     if (req.method === "GET") {
       return await handleGet(req, context, corsHeaders, pathname);
@@ -170,6 +174,171 @@ async function handlePut(
       });
     }
   }
+
+  try {
+    const result = await commitFileOnBranch({
+      repo: githubRepo,
+      token: githubToken,
+      baseRef: githubRef,
+      branch,
+      path,
+      content,
+      message,
+      ...(ifMatch ? { ifMatch } : {}),
+    });
+
+    return new Response(
+      JSON.stringify({
+        commit: result.commitSha,
+        url: result.htmlUrl,
+        branch: result.branch,
+        path,
+        etag: result.contentSha,
+      }),
+      {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          ETag: `"${result.contentSha}"`,
+        },
+      },
+    );
+  } catch (error) {
+    if (isShaMismatch(error)) {
+      return new Response("If-Match failed", {
+        status: 412,
+        headers: corsHeaders,
+      });
+    }
+    if (error instanceof GitHubApiError) {
+      return new Response(error.message, {
+        status: error.status,
+        headers: corsHeaders,
+      });
+    }
+    const message =
+      error instanceof Error ? error.message : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: corsHeaders,
+    });
+  }
+}
+
+async function handlePatch(
+  req: Request,
+  context: Context,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Promise<Response> {
+  if (!isDraftRequest(pathname)) {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
+
+  const { writeWebIds } = loadWriteConfig();
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+
+  const authResult = await verifyDpopToken(
+    authHeader,
+    dpopHeader,
+    req.url,
+    "PATCH",
+    writeWebIds,
+  );
+
+  if (!authResult.success) {
+    console.log(`[router] PATCH ${pathname} auth failed: ${authResult.message}`);
+    return new Response(authResult.message, {
+      status: authResult.statusCode,
+      headers: corsHeaders,
+    });
+  }
+
+  const { page, doc } = context.params;
+  if (!doc) {
+    return new Response("PATCH requires a document path", {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
+  const path = `${page}/${doc}`;
+
+  if (!isPathSafe(path)) {
+    return new Response("Unsafe path", {
+      status: 400,
+      headers: corsHeaders,
+    });
+  }
+
+  if (!doc.toLowerCase().endsWith(".ttl")) {
+    return new Response("PATCH is only supported on .ttl paths", {
+      status: 422,
+      headers: corsHeaders,
+    });
+  }
+
+  const contentTypeHeader = req.headers.get("content-type");
+  const contentTypeBase = contentTypeHeader?.split(";")[0]?.trim().toLowerCase();
+  if (contentTypeBase !== "text/n3") {
+    return new Response("PATCH requires Content-Type: text/n3", {
+      status: 415,
+      headers: corsHeaders,
+    });
+  }
+
+  const ifMatchHeader = req.headers.get("if-match");
+  const ifMatch = parseIfMatch(ifMatchHeader);
+
+  const { githubRepo, githubToken, githubRef } = loadGithubConfig();
+  const branch = `${page}-draft`;
+
+  const body = new Uint8Array(await req.arrayBuffer());
+
+  let existing: Uint8Array | null = null;
+  try {
+    const cur = await fetchFileFromGitHub({
+      repo: githubRepo,
+      token: githubToken,
+      ref: branch,
+      path,
+    });
+    if (cur.status === 200) {
+      existing = cur.body;
+    } else if (cur.status !== 404) {
+      return new Response(`Upstream returned ${cur.status}`, {
+        status: cur.status,
+        headers: corsHeaders,
+      });
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: corsHeaders,
+    });
+  }
+
+  let applied: { content: string; contentType: "text/turtle; charset=utf-8" };
+  try {
+    applied = await applyInsertOnlyTurtlePatch({ body, existing });
+  } catch (e) {
+    if (e instanceof PatchValidationError) {
+      return new Response(e.message, {
+        status: 422,
+        headers: corsHeaders,
+      });
+    }
+    throw e;
+  }
+
+  const content = Buffer.from(applied.content, "utf-8").toString("base64");
+  const message = `PATCH ${path} via solid-github-netlify`;
 
   try {
     const result = await commitFileOnBranch({
@@ -346,9 +515,12 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
 
     if (result.status === 404) {
       const headers: Record<string, string> = { ...ctx.corsHeaders };
-      if (ctx.draft) {
-        headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
-      }
+    if (ctx.draft) {
+      headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+      headers["Allow"] = "GET, PUT, OPTIONS";
+      headers["Accept-Put"] = "*/*";
+      headers["Accept-Patch"] = "text/n3";
+    }
       return new Response("Not Found", { status: 404, headers });
     }
 
@@ -362,6 +534,9 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
     }
     if (ctx.draft) {
       headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+      headers["Allow"] = "GET, PUT, OPTIONS";
+      headers["Accept-Put"] = "*/*";
+      headers["Accept-Patch"] = "text/n3";
     }
     return new Response(turtle, { status: 200, headers });
   } catch (error) {
@@ -422,6 +597,9 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
     }
     if (ctx.draft) {
       headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+      headers["Allow"] = "GET, PUT, OPTIONS";
+      headers["Accept-Put"] = "*/*";
+      headers["Accept-Patch"] = "text/n3";
     }
 
     const body = result.status === 304 ? null : (result.body as BodyInit);
@@ -445,10 +623,11 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
 
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin ?? "*",
-  "Access-Control-Allow-Methods": "PUT, GET, OPTIONS",
+  "Access-Control-Allow-Methods": "PATCH, PUT, GET, OPTIONS",
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match",
-  "Access-Control-Expose-Headers": "ETag, Cache-Control, WAC-Allow",
+  "Access-Control-Expose-Headers":
+    "ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch",
   Vary: "Origin",
 });
 
@@ -460,6 +639,6 @@ export const config: Config = {
     "/:page*/:doc",
     "/",
   ],
-  method: ["PUT", "GET", "OPTIONS"],
+  method: ["PATCH", "PUT", "GET", "OPTIONS"],
   preferStatic: true,
 };

@@ -30,7 +30,7 @@ describe('router function via netlify dev', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
       'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
     )
@@ -42,7 +42,7 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
   })
 
   it('returns 204 for OPTIONS on a 3-segment path', async () => {
@@ -55,7 +55,7 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
   })
 
   it('invokes the function for GET on a 3-segment path', async () => {
@@ -114,7 +114,7 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 

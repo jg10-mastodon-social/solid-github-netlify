@@ -11,7 +11,8 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
 - **Draft GET** `GET /:page*/history/draft/:doc` — same proxy but reads `${page}-draft`. If `Authorization`+`DPoP` headers are present, runs `verifyDpopToken` against `WRITE_WEBIDS` and sets a `WAC-Allow` header reflecting auth state: `user="read write", public="read"` for an authenticated allowlisted WebID, `user="read", public="read"` otherwise. **Missing headers are not an error** — anonymous reads are allowed; the auth check only elevates `WAC-Allow`.
 - **Draft container GET** `GET /:page*/history/draft/` — same listing semantics as the public container route, but reads `${page}-draft` and falls back to `GITHUB_REF` on a 404 (same logic as the draft file route). Emits `WAC-Allow` on every response with the same auth state rules as draft file GETs.
 - **Draft PUT** `PUT /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Creates the `${page}-draft` branch from `GITHUB_REF` if missing, then commits the file. Honors `If-Match` (sha precondition → 412 on mismatch) and `If-None-Match: *` (create-only → 412 if the path already exists on the branch). The two are mutually exclusive — sending both returns 400.
-- **CORS** `OPTIONS` — 204 with allow-list `PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
+- **Draft PATCH** `PATCH /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Accepts `Content-Type: text/n3` (N3 Patch per [Solid Protocol §5.3.1](https://solidproject.org/TR/protocol#modifying-resources-using-n3-patches)) and only handles the simplest supported shape: a single `solid:InsertDeletePatch` resource with non-empty `solid:inserts` and empty/absent `solid:where` and `solid:deletes`. All insert triples must be ground (no blank nodes, no variables). The handler fetches the existing file from `${page}-draft` (a 404 means "create from empty"), parses it as Turtle, adds the inserts, re-serializes the resulting graph as `text/turtle; charset=utf-8`, and commits it back to the branch. Honors `If-Match` (sha precondition → 412 on mismatch). Any other Content-Type → 415; any path not ending in `.ttl` → 422; any patch that fails validation (blank nodes / variables in inserts, `solid:where` / `solid:deletes` present, malformed body, multiple patch resources, etc.) → 422; non-draft URL → 405.
+- **CORS** `OPTIONS` — 204 with allow-list `PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
 - **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
 - **Errors** — `GitHubFetchError` (network/5xx) and `GitHubApiError` (4xx) carry the upstream status; 5xx is surfaced as 502, 4xx passes through, 404 passes through.
 
@@ -76,7 +77,8 @@ Same proxy as the public route but reads `${page}-draft`. Auth is optional and o
 4. Fetch the file from `${page}-draft` (same `fetchFileFromGitHub` path as above, with `If-None-Match` forwarded).
 5. If the upstream returns 404 (the per-page branch doesn't exist yet, or this file was never edited on the draft), transparently re-fetch from `GITHUB_REF` and use that result. The fallback's `ETag`, `Cache-Control`, and `Vary: If-None-Match` are forwarded unchanged — git blob SHAs are content-addressed, so the same content on `main` and on a freshly-created `${page}-draft` has the same SHA, and a `PUT` with `If-Match: "<etag>"` against the draft branch will be accepted. If the fallback also 404s, the caller sees 404 with `WAC-Allow`. 5xx is not retried.
 6. Build `WAC-Allow`: `user="read write", public="read"` for an authenticated allowlisted WebID; `user="read", public="read"` for an unauthenticated/anonymous reader. The header is only emitted on draft reads.
-7. Return the body with the upstream status (304 short-circuits as above).
+7. Advertise editing capability via Solid-spec-compliant headers (mirrors CommunitySolidServer's behavior): `Allow: GET, PUT, OPTIONS`, `Accept-Put: */*`, `Accept-Patch: text/n3`. The advertised methods apply to **all** draft GET responses (200/304/404 and the fallback case) — `Accept-Patch: text/n3` is advertised even for non-RDF content-types so clients like `rdflib.js` recognize the resource as editable and route PATCH requests accordingly; the handler then enforces the `.ttl`-only constraint on the actual PATCH.
+8. Return the body with the upstream status (304 short-circuits as above).
 
 ### Draft container GET `/:page*/history/draft/`
 
@@ -117,6 +119,72 @@ GitHub's Contents API is eventually consistent: two PUTs racing on the same path
 
 When neither precondition is sent, the router still probes the branch for a current sha and forwards it (best-effort overwrite-with-precondition); the write is then a no-op only if the caller GET'd in the same race window. **This is a best-effort guard, not a global lock** — for correctness, always send `If-Match`.
 
+### Draft PATCH `/:page*/history/draft/:doc`
+
+Solid-OIDC-authenticated N3 Patch pass-through to `${page}-draft`. The router advertises `Accept-Patch: text/n3` on every draft GET so Solid clients (`rdflib.js`, mashlib, etc.) recognize the resource as editable and route PATCH requests through Solid's `solid:InsertDeletePatch` flow.
+
+**Supported patch shape** — only the minimum subset that rdflib.js's single-insert edit produces:
+
+```turtle
+@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+@prefix ex: <http://example.org/>.
+
+_:patch
+      solid:inserts {
+        ex:alice ex:knows ex:bob .
+      };
+   a solid:InsertDeletePatch .
+```
+
+Requirements enforced by the handler (anything else → 422):
+
+- Exactly **one** resource of type `solid:InsertDeletePatch` in the patch document.
+- `solid:where` predicate present ⇒ the formula must be empty. Solved conditions / variable bindings are **not** supported.
+- `solid:deletes` predicate present ⇒ the formula must be empty. The router does not perform deletions.
+- `solid:inserts` predicate is required and the formula must contain **at least one** ground triple (subject/predicate must be `NamedNode`s; object must be a `NamedNode` or `Literal`).
+- No blank nodes or variables anywhere in `solid:inserts`. (Spec §5.3.1 would require freshly-created blank nodes per insert; the router rejects them as out of scope for the M3-insert subset.)
+
+Flow:
+
+1. Load `WRITE_WEBIDS`; verify the DPoP token via `verifyDpopToken` (`Authorization`+`DPoP` bound to `PATCH`+`req.url`), allow-listed against `WRITE_WEBIDS`. **Debugging:** a failure logs `[router] PATCH ${pathname} auth failed: <message>`.
+2. Resolve `path = ${page}/${doc}`; reject 400 on unsafe path; reject 405 if the route isn't a draft URL.
+3. Validate that `doc` ends in `.ttl` (case-insensitive). Anything else → 422 "PATCH is only supported on .ttl paths". Note: the GET handler still advertises `Accept-Patch: text/n3` for non-`.ttl` draft URLs so capability discovery is consistent, but the PATCH handler enforces this server-side.
+4. Validate `Content-Type: text/n3` (parameters ignored). Anything else → 415.
+5. Parse `If-Match` if present (strip weak prefix `W/` and surrounding quotes).
+6. Fetch the existing file from `${page}-draft` via `fetchFileFromGitHub`. A 404 means "create from empty"; any other upstream status passes through.
+7. Hand `body` + `existing` to `applyInsertOnlyTurtlePatch` in `src/patch.ts` (see below). Any validation failure throws `PatchValidationError` → 422 with the message.
+8. Commit the merged turtle to `${page}-draft` via `commitFileOnBranch` with the same `If-Match` handling as PUT. On failure: `GitHubApiError` with status 409 or 422 → 412; other `GitHubApiError` → its status; `GitHubFetchError` / anything else → 502.
+9. Return 200 with `{commit, url, branch, path, etag}` and `ETag: "<contentSha>"`.
+
+#### `src/patch.ts`
+
+A single function:
+
+```ts
+applyInsertOnlyTurtlePatch({ body, existing }: {
+  body: Uint8Array         // raw PATCH body, expected to be text/n3
+  existing: Uint8Array | null  // null if the file does not exist yet
+}): Promise<{ content: string; contentType: 'text/turtle; charset=utf-8' }>
+```
+
+Behavior: parses `body` as N3 (so formulae are preserved as `BlankNode`-rooted sub-graphs), locates the single `solid:InsertDeletePatch` resource, gathers the triples inside its `solid:inserts` formula, validates the constraints listed above, then parses `existing` (if present) as Turtle, adds the insert triples, and serializes the resulting graph back to Turtle. Throws `PatchValidationError` (which has a `.status` of 422) on any validation failure; the router maps that to a 422 response.
+
+#### Limitations
+
+The router implements the **minimum M3-insert subset only**. The following Solid-spec features are **not** supported and return 422:
+
+- `solid:where` with variable bindings (the BGP solver / variable-substitution machinery from `solidproject/conformance-test-harness` is out of scope here)
+- `solid:deletes` (no deletion is performed; writes are append-only)
+- Blank-node generation in `solid:inserts`
+- Variables in `solid:inserts`
+- Multi-patch documents (`solid:Patch` resources other than the single `solid:InsertDeletePatch`)
+- Named-graph patches (`solid:from` / `solid:into`)
+- `application/sparql-update` PATCH bodies (would require a SPARQL Update engine)
+- PATCH on paths that don't end in `.ttl`
+- PATCH on containers
+
+Clients that need full N3 Patch semantics per [Solid Protocol §5.3.1](https://solidproject.org/TR/protocol#modifying-resources-using-n3-patches) should target a Solid server like [CommunitySolidServer](https://github.com/CommunitySolidServer/CommunitySolidServer) instead.
+
 ### OPTIONS
 
 204 with CORS allow-list as documented above. No auth, no upstream call.
@@ -135,13 +203,14 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 ├── netlify/
 │   └── functions/
 │       └── router/
-│           └── router.mts   # GET/PUT router for /:page*/:doc and /:page*/history/draft/:doc
+│           └── router.mts   # GET/PUT/PATCH router for /:page*/:doc and /:page*/history/draft/:doc
 ├── netlify.toml             # Build config + function routing
 ├── src/
 │   ├── auth.ts              # DPoP token verification
 │   ├── config.ts            # Env loading (writeWebIds, githubRepo, githubToken, githubRef)
 │   ├── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch
-│   └── ldp.ts               # Minimal Turtle serializer for LDP BasicContainer listings
+│   ├── ldp.ts               # Minimal Turtle serializer for LDP BasicContainer listings
+│   └── patch.ts             # Minimal N3 Patch (M3-insert subset) parser/applier
 ├── tests/
 │   ├── helpers/             # dev-server spawn (port 9999)
 │   ├── unit/                # auth, config, github, ldp, router
@@ -154,7 +223,7 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 
 ### Components and trust boundaries
 
-- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in the function's exported `config.path` (`/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`); the function's exported `config.method` is `PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
+- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in the function's exported `config.path` (`/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`); the function's exported `config.method` is `PATCH, PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
 - **GitHub**: durable storage for file contents. Public reads serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`. Public container listings serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`. Draft reads and all writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
 - **OIDC issuer**: any issuer can sign DPoP tokens, but only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT. On draft GET, the same allowlist gates the `WAC-Allow` upgrade — anonymous readers (no `Authorization`/`DPoP` headers) and readers with a non-allowlisted WebID both get `user="read", public="read"` (public read is always permitted); only an authenticated allowlisted WebID elevates to `user="read write", public="read"`.
 
