@@ -1253,9 +1253,9 @@ describe('router GET container listing', () => {
     expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
     const body = await res.text()
     expect(body).toContain('@prefix ldp: <http://www.w3.org/ns/ldp#> .')
-    expect(body).toMatch(/<>\s+a\s+ldp:BasicContainer/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
     expect(body).toContain('<README.md> a ldp:Resource .')
-    expect(body).toContain('<foo/> a ldp:BasicContainer .')
+    expect(body).toMatch(/<foo\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
     expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
       expect.objectContaining({ path: '', ref: 'HEAD' })
     )

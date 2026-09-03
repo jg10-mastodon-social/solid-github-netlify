@@ -36,7 +36,11 @@ function relativeChildPath(containerUri: string, entry: ContainerEntry): string 
 }
 
 function childType(entry: ContainerEntry): string {
-  return entry.type === 'dir' ? 'ldp:BasicContainer' : 'ldp:Resource'
+  return entry.type === 'dir' ? 'ldp:Container, ldp:BasicContainer' : 'ldp:Resource'
+}
+
+function containerType(): string {
+  return 'ldp:Container, ldp:BasicContainer'
 }
 
 export function serializeContainer(containerUri: string, entries: ContainerEntry[]): string {
@@ -44,10 +48,10 @@ export function serializeContainer(containerUri: string, entries: ContainerEntry
   const lines: string[] = [`@prefix ldp: <${LDP_NS}> .`, '']
   const children = sorted.map((e) => `<${turtleEscape(relativeChildPath(containerUri, e))}>`)
   if (children.length === 0) {
-    lines.push('<> a ldp:BasicContainer ;')
+    lines.push(`<> a ${containerType()} ;`)
     lines.push('   ldp:contains .')
   } else {
-    lines.push('<> a ldp:BasicContainer ;')
+    lines.push(`<> a ${containerType()} ;`)
     lines.push(`   ldp:contains ${children.join(', ')} .`)
   }
   lines.push('')

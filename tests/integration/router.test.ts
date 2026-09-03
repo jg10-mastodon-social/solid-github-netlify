@@ -398,9 +398,9 @@ describe('router GET container listing', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
     const body = await res.text()
-    expect(body).toMatch(/<>\s+a\s+ldp:BasicContainer/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
     expect(body).toContain('<bar.txt> a ldp:Resource .')
-    expect(body).toContain('<sub/> a ldp:BasicContainer .')
+    expect(body).toMatch(/<sub\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
     expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
       expect.objectContaining({ path: 'foo', ref: 'HEAD' })
     )

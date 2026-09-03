@@ -5,12 +5,17 @@ describe('serializeContainer', () => {
   it('emits the LDP BasicContainer type for the container itself', () => {
     const turtle = serializeContainer('/foo/', [])
     expect(turtle).toContain('@prefix ldp: <http://www.w3.org/ns/ldp#> .')
-    expect(turtle).toMatch(/<>\s+a\s+ldp:BasicContainer/)
+    expect(turtle).toContain('ldp:BasicContainer')
+  })
+
+  it('emits the LDP Container type alongside BasicContainer (Solid expects ldp:Container on the resource)', () => {
+    const turtle = serializeContainer('/foo/', [])
+    expect(turtle).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
   })
 
   it('emits an empty contains list when there are no entries', () => {
     const turtle = serializeContainer('/foo/', [])
-    expect(turtle).toMatch(/<> a ldp:BasicContainer ;\s*\n\s*ldp:contains\s*\./)
+    expect(turtle).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*;\s*\n\s*ldp:contains\s*\./)
   })
 
   it('lists children via ldp:contains for a non-empty container', () => {
@@ -35,7 +40,16 @@ describe('serializeContainer', () => {
       { name: 'sub', path: 'foo/sub', type: 'dir', sha: 'sha-1' }
     ]
     const turtle = serializeContainer('/foo/', entries)
-    expect(turtle).toContain('<sub/> a ldp:BasicContainer .')
+    expect(turtle).toContain('<sub/>')
+    expect(turtle).toContain('ldp:BasicContainer')
+  })
+
+  it('types directory children as ldp:Container, ldp:BasicContainer (Solid sub-containers)', () => {
+    const entries: ContainerEntry[] = [
+      { name: 'sub', path: 'foo/sub', type: 'dir', sha: 'sha-1' }
+    ]
+    const turtle = serializeContainer('/foo/', entries)
+    expect(turtle).toMatch(/<sub\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
   })
 
   it('sorts children by path for deterministic output', () => {
@@ -90,8 +104,8 @@ describe('serializeContainer', () => {
     const turtle = serializeContainer('/foo/', entries)
     expect(turtle.endsWith('\n')).toBe(true)
     expect(turtle).toMatch(/^@prefix ldp: <http:\/\/www\.w3\.org\/ns\/ldp#> \.\n/)
-    expect(turtle).toMatch(/^<>\s+a\s+ldp:BasicContainer/m)
+    expect(turtle).toMatch(/^<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/m)
     expect(turtle).toContain('<a.txt> a ldp:Resource .')
-    expect(turtle).toContain('<b/> a ldp:BasicContainer .')
+    expect(turtle).toMatch(/<b\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer \./)
   })
 })

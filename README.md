@@ -7,7 +7,7 @@
 Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public reads from `${GITHUB_REPO}@${GITHUB_REF}`; writes go to per-page `${page}-draft` branches via Solid-OIDC-authenticated PUT.
 
 - **Public GET** `GET /:page*/:doc` — unauthenticated. Proxies `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via the GitHub Contents `application/vnd.github.raw` media type. Forwards `Content-Type` (inferred from the file extension via `mime-types`), `ETag`, and `Cache-Control`; honors `If-None-Match` (returns 304) and emits `Vary: If-None-Match` whenever the client sent one.
-- **Public container GET** `GET /`, `GET /:page*/` — unauthenticated. Lists the GitHub directory at `${GITHUB_REPO}@${GITHUB_REF}:${page}/` via the GitHub Contents `application/vnd.github+json` media type and returns a Turtle `ldp:BasicContainer` document with `ldp:contains` triples pointing to each child (children typed as `ldp:Resource` for files and `ldp:BasicContainer` for subdirectories). Content-Type is `text/turtle; charset=utf-8`. Honors `If-None-Match` (emits `Vary: If-None-Match`). PUT on container paths is rejected with 405.
+- **Public container GET** `GET /`, `GET /:page*/` — unauthenticated. Lists the GitHub directory at `${GITHUB_REPO}@${GITHUB_REF}:${page}/` via the GitHub Contents `application/vnd.github+json` media type and returns a Turtle `ldp:Container, ldp:BasicContainer` document with `ldp:contains` triples pointing to each child (files typed as `ldp:Resource`, subdirectories typed as `ldp:Container, ldp:BasicContainer`). Content-Type is `text/turtle; charset=utf-8`. Honors `If-None-Match` (emits `Vary: If-None-Match`). PUT on container paths is rejected with 405.
 - **Draft GET** `GET /:page*/history/draft/:doc` — same proxy but reads `${page}-draft`. If `Authorization`+`DPoP` headers are present, runs `verifyDpopToken` against `WRITE_WEBIDS` and sets a `WAC-Allow` header reflecting auth state: `user="read write", public="read"` for an authenticated allowlisted WebID, `user="read", public="read"` otherwise. **Missing headers are not an error** — anonymous reads are allowed; the auth check only elevates `WAC-Allow`.
 - **Draft container GET** `GET /:page*/history/draft/` — same listing semantics as the public container route, but reads `${page}-draft` and falls back to `GITHUB_REF` on a 404 (same logic as the draft file route). Emits `WAC-Allow` on every response with the same auth state rules as draft file GETs.
 - **Draft PUT** `PUT /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Creates the `${page}-draft` branch from `GITHUB_REF` if missing, then commits the file. Honors `If-Match` (sha precondition → 412 on mismatch) and `If-None-Match: *` (create-only → 412 if the path already exists on the branch). The two are mutually exclusive — sending both returns 400.
@@ -62,7 +62,7 @@ Unauthenticated listing of `${GITHUB_REPO}@${GITHUB_REF}:${page}/` as a Turtle `
 1. Load `GITHUB_REPO`/`GITHUB_TOKEN`/`GITHUB_REF` from env.
 2. Detect container requests via `pathname === '/' || pathname.endsWith('/')`. The container path is the pathname stripped of leading and trailing slashes (root `/` → empty path, which `listDirectoryFromGitHub` translates to the repo-root Contents URL).
 3. `listDirectoryFromGitHub` against `https://api.github.com/repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github+json`.
-4. If upstream 404, return 404. Otherwise, serialize the entries via `serializeContainer` (see [Repository layout](#repository-layout) for an example).
+4. If upstream 404, return 404. Otherwise, serialize the entries via `serializeContainer` (see [Repository layout](#repository-layout) for an example). The container is typed `ldp:Container, ldp:BasicContainer`; files are typed `ldp:Resource` and subdirectories are typed `ldp:Container, ldp:BasicContainer`.
 5. Set `Content-Type: text/turtle; charset=utf-8`. Add `Vary: If-None-Match` when the caller sent an `If-None-Match`. 5xx is surfaced as `GitHubFetchError` → 502; 4xx surfaces as `GitHubApiError` → 502.
 
 ### Draft GET `/:page*/history/draft/:doc`
@@ -84,7 +84,7 @@ Same listing semantics as the public container route, but reads `${page}-draft` 
 
 1. Same auth and fallback logic as draft file GETs: `verifyDpopToken` only runs when both `Authorization` and `DPoP` headers are present, and a 404 on `${page}-draft` triggers a transparent re-fetch from `GITHUB_REF`.
 2. `WAC-Allow` is emitted on every response (200, 404, fallback) with the same `user="read write" | "read"`, `public="read"` rules as draft file GETs.
-3. On 200, the body is a Turtle `ldp:BasicContainer` document (same serializer as the public route); `Content-Type` is `text/turtle; charset=utf-8`. `Vary: If-None-Match` is added when the caller sent `If-None-Match`.
+3. On 200, the body is a Turtle `ldp:Container, ldp:BasicContainer` document (same serializer as the public route); `Content-Type` is `text/turtle; charset=utf-8`. `Vary: If-None-Match` is added when the caller sent `If-None-Match`.
 
 ### Draft PUT `/:page*/history/draft/:doc`
 
