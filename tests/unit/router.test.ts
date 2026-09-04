@@ -2301,8 +2301,8 @@ describe('router history root', () => {
 
   it('declares the history catch-all AFTER the draft path so draft paths still match the existing draft handler', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
-    const draftIdx = config.path.indexOf('/:page*/history/draft/:doc*')
-    const catchAllIdx = config.path.indexOf('/:page*/history/:rest*')
+    const draftIdx = (config.path ?? []).indexOf('/:page*/history/draft/:doc*')
+    const catchAllIdx = (config.path ?? []).indexOf('/:page*/history/:rest*')
     expect(draftIdx).toBeGreaterThanOrEqual(0)
     expect(catchAllIdx).toBeGreaterThanOrEqual(0)
     expect(draftIdx).toBeLessThan(catchAllIdx)

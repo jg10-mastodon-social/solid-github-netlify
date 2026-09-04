@@ -28,15 +28,22 @@ function tempOutput(): string {
   return join(makeTempDir(), 'repo-start-year.generated.mjs')
 }
 
+type LogFn = (msg: string) => void
+type Spy = ReturnType<typeof vi.fn> & LogFn
+
+function makeSpy(): Spy {
+  return vi.fn() as Spy
+}
+
 describe('deriveRepoStartYear', () => {
-  let logSpy: ReturnType<typeof vi.fn>
-  let warnSpy: ReturnType<typeof vi.fn>
-  let errorSpy: ReturnType<typeof vi.fn>
+  let logSpy: Spy
+  let warnSpy: Spy
+  let errorSpy: Spy
 
   beforeEach(() => {
-    logSpy = vi.fn()
-    warnSpy = vi.fn()
-    errorSpy = vi.fn()
+    logSpy = makeSpy()
+    warnSpy = makeSpy()
+    errorSpy = makeSpy()
   })
 
   afterEach(() => {

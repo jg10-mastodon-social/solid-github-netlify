@@ -9,8 +9,9 @@
     "outDir": ".build",
     "rootDir": ".",
     "types": ["node"],
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "allowJs": true
   },
-  "include": ["netlify/**/*.mts", "src/**/*.ts", "tests/**/*.ts"],
+  "include": ["netlify/**/*.mts", "src/**/*.ts", "tests/**/*.ts", "scripts/**/*.mjs"],
   "exclude": ["node_modules", ".build"]
 }

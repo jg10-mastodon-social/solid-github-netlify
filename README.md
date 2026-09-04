@@ -12,7 +12,21 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
 - **Draft container GET** `GET /:page*/history/draft/` — same listing semantics as the public container route, but reads `${page}-draft` and falls back to `GITHUB_REF` on a 404 (same logic as the draft file route). Emits `WAC-Allow` on every response with the same auth state rules as draft file GETs.
 - **Draft PUT** `PUT /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Creates the `${page}-draft` branch from `GITHUB_REF` if missing, then commits the file. Honors `If-Match` (sha precondition → 412 on mismatch) and `If-None-Match: *` (create-only → 412 if the path already exists on the branch). The two are mutually exclusive — sending both returns 400.
 - **Draft PATCH** `PATCH /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Accepts `Content-Type: text/n3` (N3 Patch per [Solid Protocol §5.3.1](https://solidproject.org/TR/protocol#modifying-resources-using-n3-patches)) and only handles the simplest supported shape: a single `solid:InsertDeletePatch` resource with non-empty `solid:inserts` and empty/absent `solid:where` and `solid:deletes`. All insert triples must be ground (no blank nodes, no variables). The handler fetches the existing file from `${page}-draft` (a 404 means "create from empty"), parses it as Turtle, adds the inserts, re-serializes the resulting graph as `text/turtle; charset=utf-8`, and commits it back to the branch. Honors `If-Match` (sha precondition → 412 on mismatch). Any other Content-Type → 415; any path not ending in `.ttl` → 422; any patch that fails validation (blank nodes / variables in inserts, `solid:where` / `solid:deletes` present, malformed body, multiple patch resources, etc.) → 422; non-draft URL → 405.
+- **History root** `GET /:page*/history` — unauthenticated. LDP `BasicContainer` listing the years from `REPO_START_YEAR` (derived at build time from the GitHub repo's `created_at`, see [Build](#build)) through the current year. Zero GitHub API calls. `Cache-Control: public, max-age=86400, stale-while-revalidate=259200` (1 day fresh, 3 days SWR — the listing only changes at year boundaries).
+- **Year container** `GET /:page*/history/:year` — unauthenticated. LDP `BasicContainer` of `<MM>/` sub-containers for the months that have commits affecting `<page>/*` on `${GITHUB_REF}`. Backed by a single `listCommitsForPath` call scoped with `since=YYYY-01-01&until=YYYY-12-31T23:59:59Z`. Years outside `[REPO_START_YEAR, currentYear]` return 404. `Cache-Control: max-age=86400, swr=259200`.
+- **Month container** `GET /:page*/history/:year/:month` — unauthenticated. LDP `BasicContainer` of `<shortSha>/` commit-folder children for the commits affecting `<page>/*` in that month on `${GITHUB_REF}`. Backed by a single `listCommitsForPath` call scoped to the month. Empty months return 200 with empty `ldp:contains`. `Cache-Control: max-age=86400, swr=259200`.
+- **Commit folder** `GET /:page*/history/<shortSha>` — unauthenticated. LDP `BasicContainer` listing the immediate children of `<page>/` at that commit (single `listDirectoryFromGitHub` call, no recursive subtree). `Cache-Control: public, max-age=31536000, immutable` (the URL is the commit, the response cannot change).
+- **Commit file** `GET /:page*/history/<shortSha>/:doc*` — unauthenticated. Serves the file at the resolved commit SHA. The `<shortSha>` is the source of truth; any year/month bucket prefix in the URL is ignored — `/foo/history/2024/03/abc1234/foo.txt` and `/foo/history/abc1234/foo.txt` resolve to the same file. Single `fetchFileFromGitHub` call. `Cache-Control: public, max-age=31536000, immutable`. Forwards `Content-Type`, `ETag`, and `If-None-Match` (returns 304) per the public GET route.
 - **CORS** `OPTIONS` — 204 with allow-list `PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
+
+### History route semantics
+
+- The history tree is an LDP-navigable view over GitHub's commit history on `${GITHUB_REF}`. No merges or pending writes — those live in `${page}-draft` via the existing draft route.
+- Discovery is bucket-based: year → month → `<shortSha>/` → file. There is no ActivityStreams changelog in this iteration; the LDP tree IS the changelog.
+- All SHA-bearing responses are immutable-cacheable because the commit SHA in the URL identifies the snapshot exactly.
+- All bucket (year/month) responses are bounded by `listCommitsForPath` with `since`/`until` scoping — they paginate only within the requested date range, not the full repo history.
+- `/foo/history/draft` (no `:doc`) returns 404 — the draft route is handled by its own path matcher; the history catch-all only matches non-draft paths.
+- The history container and commit file routes make zero or one GitHub API call per request; the year/month container routes make exactly one. No N+1 enumeration of repo history.
 - **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
 - **Errors** — `GitHubFetchError` (network/5xx) and `GitHubApiError` (4xx) carry the upstream status; 5xx is surfaced as 502, 4xx passes through, 404 passes through.
 
@@ -185,6 +199,46 @@ The router implements the **minimum M3-insert subset only**. The following Solid
 
 Clients that need full N3 Patch semantics per [Solid Protocol §5.3.1](https://solidproject.org/TR/protocol#modifying-resources-using-n3-patches) should target a Solid server like [CommunitySolidServer](https://github.com/CommunitySolidServer/CommunitySolidServer) instead.
 
+### History routes (LDP-navigable commit history)
+
+The history tree under `/:page*/history/` is an LDP-navigable view of `${GITHUB_REPO}@${GITHUB_REF}`'s commit history affecting `<page>/*`. It is fully read-only and anonymous; mutations flow through the existing draft route.
+
+#### URL matrix
+
+| URL | Response | Backing API calls |
+|---|---|---|
+| `GET /:page/history` | LDP `BasicContainer` listing years `[REPO_START_YEAR..currentYear]` | **0** |
+| `GET /:page/history/YYYY` (in range) | LDP `BasicContainer` of `<MM>/` for months with commits | 1 (date-scoped `listCommitsForPath`) |
+| `GET /:page/history/YYYY` (out of range) | 404 | 0 |
+| `GET /:page/history/YYYY/MM` | LDP `BasicContainer` of `<shortSha>/` for commits in that month | 1 (date-scoped `listCommitsForPath`) |
+| `GET /:page/history/YYYY/MM/<shortSha>` | LDP `BasicContainer` listing immediate children of `<page>/` at that commit | 1 (`listDirectoryFromGitHub`, single-folder, no recursive subtree) |
+| `GET /:page/history/<shortSha>` | same as above (year/month prefix optional) | 1 |
+| `GET /:page/history/<shortSha>/<doc*>` | file content at that commit | 1 (`fetchFileFromGitHub`) |
+| `GET /:page/history/YYYY/MM/<shortSha>/<doc*>` | same as above (year/month prefix ignored) | 1 |
+
+Content negotiation: `Accept: text/turtle` (or absent) → `text/turtle; charset=utf-8`; `Accept: text/html` → `text/html; charset=utf-8`. The HTML form renders a `<ul>` of `<a href>` children, suitable for browser navigation.
+
+#### SHA-robust addressing
+
+The commit SHA in the URL is the source of truth. Year and month segments in the URL are bucket metadata used for LDP navigation; they are not used to resolve the commit. Concretely:
+
+- `/foo/history/abc1234/foo.txt` and `/foo/history/2024/03/abc1234/foo.txt` both fetch `<page>/foo.txt` at commit `abc1234*`. The wrong year/month prefix is ignored.
+- `/foo/history/draft` (no `:doc`) returns 404 — the draft route has its own path matcher and is unaffected by the history catch-all.
+- SHA validity: 7–40 lowercase hex characters. SHAless URLs (e.g. `/foo/history/2026/`) are valid only as year/month container listings, not as file fetches.
+
+#### Cache strategy
+
+- Year/month containers: `public, max-age=86400, stale-while-revalidate=259200` (1 day fresh, 3 days SWR). New commits can land mid-month; 1 day is a safe upper bound.
+- Commit folder + file responses: `public, max-age=31536000, immutable` (1 year). The URL is the commit, the response cannot change.
+
+#### Build-time REPO_START_YEAR derivation
+
+`scripts/derive-repo-start-year.mjs` is the build step (`netlify.toml`'s `command`). It calls `GET https://api.github.com/repos/{owner}/{repo}` with the deploy's `GITHUB_TOKEN`, extracts the year of `created_at`, and writes `netlify/functions/router/repo-start-year.generated.mjs` exporting `REPO_START_YEAR = <year>`. The router imports this constant; the file is gitignored and regenerated on every deploy.
+
+When `GITHUB_REPO` / `GITHUB_TOKEN` are not set (local dev, `npm test`), the script writes a placeholder `REPO_START_YEAR = 0` so imports never fail. In that mode the year container includes every year from 0 to current — most are empty, but routing still works.
+
+A `pretest` hook in `package.json` and a `vitest globalSetup` in `tests/helpers/build-config-setup.ts` both run the script before tests, so `npm test` and `npx vitest run` both work without manual setup.
+
 ### OPTIONS
 
 204 with CORS allow-list as documented above. No auth, no upstream call.
@@ -203,17 +257,20 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 ├── netlify/
 │   └── functions/
 │       └── router/
-│           └── router.mts   # GET/PUT/PATCH router for /:page*/:doc and /:page*/history/draft/:doc
-├── netlify.toml             # Build config + function routing
+│           └── router.mts   # GET/PUT/PATCH router for /:page*/:doc, /:page*/history/draft/:doc, and /:page*/history/:rest*
+├── netlify.toml             # Build config (runs derive-repo-start-year.mjs) + function routing
+├── scripts/
+│   └── derive-repo-start-year.mjs   # Build-time step: writes REPO_START_YEAR to a generated .mjs
 ├── src/
 │   ├── auth.ts              # DPoP token verification
 │   ├── config.ts            # Env loading (writeWebIds, githubRepo, githubToken, githubRef)
-│   ├── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch
-│   ├── ldp.ts               # Minimal Turtle serializer for LDP BasicContainer listings
+│   ├── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch + listCommitsForPath
+│   ├── history.ts           # parseHistoryPath: pure URL shape -> discriminated union
+│   ├── ldp.ts               # LDP BasicContainer Turtle/HTML serializers
 │   └── patch.ts             # Minimal N3 Patch (M3-insert subset) parser/applier
 ├── tests/
-│   ├── helpers/             # dev-server spawn (port 9999)
-│   ├── unit/                # auth, config, github, ldp, router
+│   ├── helpers/             # dev-server spawn (port 9999) + build-config setup
+│   ├── unit/                # auth, config, github, history, ldp, router, build-config
 │   ├── integration/         # Router handler tests with mocked deps
 │   └── e2e/                 # Tests against `netlify dev`
 └── LICENSE
@@ -223,8 +280,8 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 
 ### Components and trust boundaries
 
-- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in the function's exported `config.path` (`/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`); the function's exported `config.method` is `PATCH, PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
-- **GitHub**: durable storage for file contents. Public reads serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`. Public container listings serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`. Draft reads and all writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
+- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in the function's exported `config.path` (`/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`, `/:page*/history/:rest*`); the function's exported `config.method` is `PATCH, PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
+- **GitHub**: durable storage for file contents. Public reads serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`. Public container listings serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`. The history routes additionally use `GET /repos/${repo}/commits?sha=${branch}&path=${path}&since=...&until=...` to enumerate commits and `GET /repos/${repo}/contents/${path}?ref=${shortSha}` to fetch a file at a specific commit. Draft reads and all writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
 - **OIDC issuer**: any issuer can sign DPoP tokens, but only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT. On draft GET, the same allowlist gates the `WAC-Allow` upgrade — anonymous readers (no `Authorization`/`DPoP` headers) and readers with a non-allowlisted WebID both get `user="read", public="read"` (public read is always permitted); only an authenticated allowlisted WebID elevates to `user="read write", public="read"`.
 
 ### Repository layout
