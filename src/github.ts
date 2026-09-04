@@ -412,3 +412,78 @@ function buildContentsUrl(repo: string, ref: string, path: string): string {
   const encoded = encodePath(path)
   return `https://api.github.com/repos/${repo}/contents/${encoded}?ref=${encodeURIComponent(ref)}`
 }
+
+export interface ListCommitsForPathOptions {
+  repo: string
+  token: string
+  branch: string
+  path: string
+  perPage?: number
+  page?: number
+  since?: string
+  until?: string
+}
+
+export interface Commit {
+  sha: string
+  message: string
+  authorName: string
+  authorEmail: string
+  authorLogin?: string
+  date: string
+  htmlUrl: string
+}
+
+export async function listCommitsForPath(
+  options: ListCommitsForPathOptions
+): Promise<Commit[]> {
+  const url = buildCommitsUrl(options)
+  const headers = jsonHeaders(options.token)
+  headers['Accept'] = 'application/vnd.github+json'
+
+  const response = await githubFetch(url, { method: 'GET', headers }, GitHubApiError)
+
+  if (response.status === 404) {
+    return []
+  }
+
+  const data = (await response.json()) as Array<{
+    sha?: string
+    commit?: {
+      message?: string
+      author?: { name?: string; email?: string; date?: string }
+    }
+    author?: { login?: string } | null
+    html_url?: string
+  }>
+
+  if (!Array.isArray(data)) {
+    return []
+  }
+
+  return data
+    .filter((c) => typeof c.sha === 'string')
+    .map((c) => ({
+      sha: c.sha as string,
+      message: c.commit?.message ?? '',
+      authorName: c.commit?.author?.name ?? '',
+      authorEmail: c.commit?.author?.email ?? '',
+      authorLogin:
+        c.author && typeof c.author === 'object' && typeof c.author.login === 'string'
+          ? c.author.login
+          : undefined,
+      date: c.commit?.author?.date ?? '',
+      htmlUrl: c.html_url ?? ''
+    }))
+}
+
+function buildCommitsUrl(options: ListCommitsForPathOptions): string {
+  const params = new URLSearchParams()
+  params.set('sha', options.branch)
+  params.set('path', options.path)
+  if (typeof options.perPage === 'number') params.set('per_page', String(options.perPage))
+  if (typeof options.page === 'number') params.set('page', String(options.page))
+  if (typeof options.since === 'string') params.set('since', options.since)
+  if (typeof options.until === 'string') params.set('until', options.until)
+  return `https://api.github.com/repos/${options.repo}/commits?${params.toString()}`
+}

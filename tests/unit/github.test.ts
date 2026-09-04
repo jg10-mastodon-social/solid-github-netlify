@@ -12,6 +12,7 @@ import {
   commitFile,
   commitFileOnBranch,
   parseIfMatch,
+  listCommitsForPath,
 } from '../../src/github.js'
 
 function textResponse(body: string, init: ResponseInit = {}): Response {
@@ -1100,5 +1101,208 @@ describe('listDirectoryFromGitHub', () => {
     })
 
     expect(result.entries.map((e) => e.type)).toEqual(['file', 'dir', 'symlink', 'submodule'])
+  })
+})
+
+describe('listCommitsForPath', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('builds the commits URL with owner, repo, sha, path, per_page, and page params', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'foo',
+      perPage: 30,
+      page: 1
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(
+      'https://api.github.com/repos/octocat/hello-world/commits?sha=main&path=foo&per_page=30&page=1'
+    )
+    expect(init.method).toBe('GET')
+    const headers = init.headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer ghp_test')
+    expect(headers['Accept']).toBe('application/vnd.github+json')
+    expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28')
+    expect(headers['User-Agent']).toBe('solid-github-netlify'
+    )
+  })
+
+  it('omits per_page and page when not provided', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'foo'
+    })
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.github.com/repos/octocat/hello-world/commits?sha=main&path=foo')
+    expect(url).not.toContain('per_page')
+    expect(url).not.toContain('page=')
+  })
+
+  it('appends since and until query params when provided', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'foo',
+      since: '2024-01-01T00:00:00Z',
+      until: '2024-12-31T23:59:59Z'
+    })
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('since=2024-01-01T00%3A00%3A00Z')
+    expect(url).toContain('until=2024-12-31T23%3A59%3A59Z')
+  })
+
+  it('encodes path segments in the path query param', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'docs/read me'
+    })
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/path=docs(%2F|\/)read(\+|%20)me/)
+  })
+
+  it('parses a commit list response into normalised Commit[]', async () => {
+    mockFetchSequence([
+      jsonResponse(
+        [
+          {
+            sha: 'abc12345',
+            commit: {
+              message: 'First commit',
+              author: { name: 'Alice', email: 'alice@example.com', date: '2024-01-15T10:00:00Z' }
+            },
+            author: { login: 'alice' },
+            html_url: 'https://github.com/octocat/hello-world/commit/abc12345'
+          },
+          {
+            sha: 'def67890',
+            commit: {
+              message: 'Second commit',
+              author: { name: 'Bob', email: 'bob@example.com', date: '2024-02-20T12:00:00Z' }
+            },
+            html_url: 'https://github.com/octocat/hello-world/commit/def67890'
+          }
+        ],
+        { status: 200 }
+      )
+    ])
+
+    const result = await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'foo'
+    })
+
+    expect(result).toEqual([
+      {
+        sha: 'abc12345',
+        message: 'First commit',
+        authorName: 'Alice',
+        authorEmail: 'alice@example.com',
+        authorLogin: 'alice',
+        date: '2024-01-15T10:00:00Z',
+        htmlUrl: 'https://github.com/octocat/hello-world/commit/abc12345'
+      },
+      {
+        sha: 'def67890',
+        message: 'Second commit',
+        authorName: 'Bob',
+        authorEmail: 'bob@example.com',
+        authorLogin: undefined,
+        date: '2024-02-20T12:00:00Z',
+        htmlUrl: 'https://github.com/octocat/hello-world/commit/def67890'
+      }
+    ])
+  })
+
+  it('returns an empty array on a 200 with empty body', async () => {
+    mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    const result = await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'foo'
+    })
+
+    expect(result).toEqual([])
+  })
+
+  it('returns an empty array on a 404 (no commits for the path)', async () => {
+    mockFetchSequence([new Response('Not Found', { status: 404 })])
+
+    const result = await listCommitsForPath({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      branch: 'main',
+      path: 'missing'
+    })
+
+    expect(result).toEqual([])
+  })
+
+  it('throws GitHubApiError on 5xx upstream', async () => {
+    mockFetchSequence([new Response('boom', { status: 502 })])
+
+    await expect(
+      listCommitsForPath({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        branch: 'main',
+        path: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('throws GitHubApiError on 4xx other than 404', async () => {
+    mockFetchSequence([new Response('Unprocessable', { status: 422 })])
+
+    await expect(
+      listCommitsForPath({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        branch: 'main',
+        path: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('throws GitHubApiError on network failure', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network down')) as unknown as typeof fetch
+
+    await expect(
+      listCommitsForPath({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        branch: 'main',
+        path: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
   })
 })
