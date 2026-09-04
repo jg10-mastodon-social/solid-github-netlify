@@ -74,6 +74,7 @@ describe('router config', () => {
     expect(config.path).toEqual([
       '/:page*/history/draft/',
       '/:page*/history/draft/:doc*',
+      '/:page*/history/:rest*',
       '/:page*/',
       '/:page*/:doc',
       '/'
@@ -2190,5 +2191,118 @@ describe('router GET container listing', () => {
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
     expect(res.headers.get('Vary')).toContain('Origin')
+  })
+})
+
+describe('router history root', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('adds a /:page*/history/:rest* catch-all path matcher', async () => {
+    const { config } = await import('../../netlify/functions/router/router.mts')
+    expect(config.path).toContain('/:page*/history/:rest*')
+  })
+
+  it('GET /foo/history with Accept: text/turtle returns an LDP BasicContainer listing years', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('ldp:BasicContainer')
+    expect(body).toMatch(/ldp:contains/)
+  })
+
+  it('lists years from REPO_START_YEAR through currentYear as ldp:contains children', async () => {
+    const currentYear = new Date().getUTCFullYear()
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    const body = await res.text()
+    expect(body).toContain(`<${currentYear}/>`)
+  })
+
+  it('emits a 1-day max-age Cache-Control header', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(200)
+    const cacheControl = res.headers.get('Cache-Control') ?? ''
+    expect(cacheControl).toMatch(/max-age=86400/)
+  })
+
+  it('makes zero GitHub API calls for the history root', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'foo', rest: '' } }))
+
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/history with Accept: text/html returns an HTML container', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/<!doctype html>/i)
+    expect(body).toMatch(/<ul>/)
+  })
+
+  it('GET /foo/history/draft (no doc) returns 404', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'draft' } })
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('declares the history catch-all AFTER the draft path so draft paths still match the existing draft handler', async () => {
+    const { config } = await import('../../netlify/functions/router/router.mts')
+    const draftIdx = config.path.indexOf('/:page*/history/draft/:doc*')
+    const catchAllIdx = config.path.indexOf('/:page*/history/:rest*')
+    expect(draftIdx).toBeGreaterThanOrEqual(0)
+    expect(catchAllIdx).toBeGreaterThanOrEqual(0)
+    expect(draftIdx).toBeLessThan(catchAllIdx)
   })
 })

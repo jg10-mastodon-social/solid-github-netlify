@@ -12,7 +12,9 @@ import {
   parseIfMatch,
 } from "../../../src/github.js";
 import { applyInsertOnlyTurtlePatch, PatchValidationError } from "../../../src/patch.js";
-import { serializeContainer } from "../../../src/ldp.js";
+import { serializeContainer, formatContainerHtml } from "../../../src/ldp.js";
+import { parseHistoryPath, type HistoryPath } from "../../../src/history.js";
+import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
 
@@ -54,7 +56,7 @@ export default async (req: Request, context: Context) => {
       return await handlePatch(req, context, corsHeaders, pathname);
     }
     if (req.method === "GET") {
-      return await handleGet(req, context, corsHeaders, pathname);
+      return handleGet(req, context, corsHeaders, pathname);
     }
     return new Response(
       `${req.method} ${context.params.page} / ${context.params.doc}`,
@@ -80,6 +82,77 @@ function errorResponse(error: unknown, corsHeaders: Record<string, string>): Res
 
 function isDraftRequest(pathname: string): boolean {
   return pathname.includes(DRAFT_SUFFIX);
+}
+
+function isHistoryRequest(pathname: string, _context: Context): boolean {
+  if (isDraftRequest(pathname)) return false;
+  return /^\/[^/]+\/history(\/|$)/.test(pathname);
+}
+
+function handleHistoryGet(
+  req: Request,
+  context: Context,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Response {
+  const page = context.params.page ?? "";
+  const stripped = pathname.replace(/^\/+/, "");
+  const prefix = `${page}/history`;
+  const rest = stripped.startsWith(prefix + "/")
+    ? stripped.slice(prefix.length + 1)
+    : stripped === prefix
+      ? ""
+      : "";
+
+  const parsed = parseHistoryPath(rest);
+  if (parsed === null) {
+    return notFound(corsHeaders);
+  }
+
+  if (parsed.kind === "history_root") {
+    return serveHistoryRoot(req, page, corsHeaders);
+  }
+
+  return notFound(corsHeaders);
+}
+
+function notFound(corsHeaders: Record<string, string>): Response {
+  return new Response("Not Found", { status: 404, headers: corsHeaders });
+}
+
+function serveHistoryRoot(
+  req: Request,
+  page: string,
+  corsHeaders: Record<string, string>,
+): Response {
+  const currentYear = new Date().getUTCFullYear();
+  const startYear = REPO_START_YEAR;
+  const yearEntries: { name: string; path: string; type: "dir"; sha: string }[] = [];
+  for (let y = startYear; y <= currentYear; y++) {
+    yearEntries.push({
+      name: String(y),
+      path: `${page}/history/${y}`,
+      type: "dir",
+      sha: ""
+    });
+  }
+
+  const containerUri = `/${page}/history/`;
+  const accept = req.headers.get("Accept") ?? "";
+  const wantHtml = accept.includes("text/html") && !accept.includes("text/turtle");
+
+  const body = wantHtml
+    ? formatContainerHtml(containerUri, `Contents of ${page}/history`, yearEntries)
+    : serializeContainer(containerUri, yearEntries);
+
+  const headers: Record<string, string> = {
+    ...corsHeaders,
+    "Content-Type": wantHtml
+      ? "text/html; charset=utf-8"
+      : "text/turtle; charset=utf-8",
+    "Cache-Control": "public, max-age=86400, stale-while-revalidate=259200"
+  };
+  return new Response(body, { status: 200, headers });
 }
 
 function appendVary(existing: string | undefined, value: string): string {
@@ -397,6 +470,9 @@ async function handleGet(
   corsHeaders: Record<string, string>,
   pathname: string,
 ): Promise<Response> {
+  if (isHistoryRequest(pathname, context)) {
+    return handleHistoryGet(req, context, corsHeaders, pathname);
+  }
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
   const isContainer = pathname === "/" || pathname.endsWith("/");
   const draft = isDraftRequest(pathname);
@@ -635,6 +711,7 @@ export const config: Config = {
   path: [
     "/:page*/history/draft/",
     "/:page*/history/draft/:doc*",
+    "/:page*/history/:rest*",
     "/:page*/",
     "/:page*/:doc",
     "/",
