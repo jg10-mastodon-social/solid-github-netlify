@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { Parser } from 'n3'
 import { serializeContainer, formatContainerHtml, type ContainerEntry } from '../../src/ldp.js'
 
 describe('serializeContainer', () => {
@@ -13,9 +14,30 @@ describe('serializeContainer', () => {
     expect(turtle).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
   })
 
-  it('emits an empty contains list when there are no entries', () => {
+  it('omits ldp:contains for an empty container (valid Turtle)', () => {
     const turtle = serializeContainer('/foo/', [])
-    expect(turtle).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*;\s*\n\s*ldp:contains\s*\./)
+    expect(turtle).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
+    expect(turtle).not.toMatch(/ldp:contains/)
+  })
+
+  it('parses as valid Turtle for empty containers (regression: solid client N3 parse error)', () => {
+    const turtle = serializeContainer('/foo/', [])
+    const parser = new Parser({ baseIRI: 'https://example.test/foo/' })
+    expect(() => parser.parse(turtle)).not.toThrow()
+    const quads = [...parser.parse(turtle)]
+    expect(quads.length).toBeGreaterThan(0)
+  })
+
+  it('parses as valid Turtle for non-empty containers', () => {
+    const entries: ContainerEntry[] = [
+      { name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-1' },
+      { name: 'sub', path: 'foo/sub', type: 'dir', sha: 'sha-2' }
+    ]
+    const turtle = serializeContainer('/foo/', entries)
+    const parser = new Parser({ baseIRI: 'https://example.test/foo/' })
+    expect(() => parser.parse(turtle)).not.toThrow()
+    const quads = [...parser.parse(turtle)]
+    expect(quads.length).toBeGreaterThan(0)
   })
 
   it('lists children via ldp:contains for a non-empty container', () => {

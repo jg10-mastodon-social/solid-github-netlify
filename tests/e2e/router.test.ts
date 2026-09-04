@@ -262,14 +262,16 @@ describe('history routes via netlify dev (offline)', () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/history/2026/`, { method: 'GET' })
     expect(res.status).toBe(200)
     const body = await res.text()
-    expect(body).toMatch(/ldp:contains\s*\./)
+    expect(body).not.toMatch(/ldp:contains/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
   })
 
   it('GET /foo/history/2026/08/ invokes the function and serves an empty month container (200)', async () => {
     const res = await fetchWithRetry(`${devServerUrl}/foo/history/2026/08/`, { method: 'GET' })
     expect(res.status).toBe(200)
     const body = await res.text()
-    expect(body).toMatch(/ldp:contains\s*\./)
+    expect(body).not.toMatch(/ldp:contains/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
   })
 
   it('GET /foo/history/abc1234/ invokes the function and returns 404 (commit folder)', async () => {

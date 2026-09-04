@@ -118,11 +118,8 @@ export function serializeContainer(containerUri: string, entries: ContainerEntry
   const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path))
   const lines: string[] = [`@prefix ldp: <${LDP_NS}> .`, '']
   const children = sorted.map((e) => `<${turtleEscape(relativeChildPath(containerUri, e))}>`)
-  if (children.length === 0) {
-    lines.push(`<> a ${containerType()} ;`)
-    lines.push('   ldp:contains .')
-  } else {
-    lines.push(`<> a ${containerType()} ;`)
+  lines.push(`<> a ${containerType()}${children.length === 0 ? ' .' : ' ;'}`)
+  if (children.length > 0) {
     lines.push(`   ldp:contains ${children.join(', ')} .`)
   }
   lines.push('')

@@ -2405,7 +2405,8 @@ describe('router year/month containers', () => {
 
     expect(res.status).toBe(200)
     const body = await res.text()
-    expect(body).toMatch(/ldp:contains\s*\./)
+    expect(body).not.toMatch(/ldp:contains/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
   })
 
   it('GET /foo/history/2026/08 calls listCommitsForPath with since/until for that month', async () => {
@@ -2484,7 +2485,8 @@ describe('router year/month containers', () => {
 
     expect(res.status).toBe(200)
     const body = await res.text()
-    expect(body).toMatch(/ldp:contains\s*\./)
+    expect(body).not.toMatch(/ldp:contains/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
   })
 
   it('year and month containers set Cache-Control max-age=86400', async () => {
@@ -2602,7 +2604,7 @@ describe('router commit folder', () => {
     expect(body).toContain('<blog/>')
   })
 
-  it('emits an empty container (200 with empty ldp:contains) when the commit has no files for the page', async () => {
+  it('emits an empty container (200 with no ldp:contains) when the commit has no files for the page', async () => {
     mockListDirectoryFromGitHub.mockResolvedValueOnce({
       status: 200,
       entries: []
@@ -2622,7 +2624,8 @@ describe('router commit folder', () => {
 
     expect(res.status).toBe(200)
     const body = await res.text()
-    expect(body).toMatch(/ldp:contains\s*\./)
+    expect(body).not.toMatch(/ldp:contains/)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
   })
 
   it('returns 404 when the page folder does not exist at the commit', async () => {
