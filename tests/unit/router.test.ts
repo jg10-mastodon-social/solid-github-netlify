@@ -2920,3 +2920,107 @@ describe('router commit file (SHA-robust)', () => {
     expect(mockFetchFileFromGitHub.mock.calls[0][0].ifNoneMatch).toBe('W/"abc"')
   })
 })
+
+describe('router PUT rejection on commit-addressed URLs', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('returns 405 on PUT to /:page/history/<shortSha>/<doc>', async () => {
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234/foo.txt', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'hello'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 405 on PUT to bucket-prefixed /:page/history/<YYYY>/<MM>/<shortSha>/<doc>', async () => {
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2024/03/abc1234/foo.txt', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'hello'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2024/03/abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 405 on PUT to /:page/history/<shortSha>/', async () => {
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'hello'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(405)
+  })
+
+  it('returns 405 on PUT to /:page/history/<YYYY>/', async () => {
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'hello'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026' } })
+    )
+
+    expect(res.status).toBe(405)
+  })
+
+  it('returns 405 on PUT to /:page/history/ root', async () => {
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'hello'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(405)
+  })
+})
