@@ -83,8 +83,30 @@ export async function deriveRepoStartYear(opts = {}) {
   })
 
   if (!response.ok) {
+    let detail = ''
+    try {
+      const raw = (await response.text()).slice(0, 500)
+      if (raw) {
+        let message = raw
+        try {
+          const parsed = JSON.parse(raw)
+          if (
+            parsed &&
+            typeof parsed.message === 'string' &&
+            parsed.message
+          ) {
+            message = parsed.message
+          }
+        } catch {
+          // not JSON; keep raw text
+        }
+        detail = `: ${message}`
+      }
+    } catch {
+      // body unreadable
+    }
     errorFn(
-      `[derive-repo-start-year] GitHub API returned ${response.status} for ${repo}.`
+      `[derive-repo-start-year] GitHub API returned ${response.status} for ${repo}${detail}.`
     )
     return { status: 'failed', reason: `http-${response.status}` }
   }

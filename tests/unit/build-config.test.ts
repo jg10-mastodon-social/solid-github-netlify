@@ -194,7 +194,38 @@ describe('deriveRepoStartYear', () => {
   })
 
   describe('when the API returns a non-2xx response', () => {
-    it('returns a failed result with the http status as reason', async () => {
+    it('returns a failed result with the http status as reason and includes the JSON message', async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            message: 'Bad credentials',
+            documentation_url: 'https://docs.github.com/...',
+          }),
+          {
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+          }
+        )
+      )
+
+      const result = await deriveRepoStartYear({
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        env: { GITHUB_REPO: 'octocat/hello-world', GITHUB_TOKEN: 'ghp_test' },
+        outputPath: tempOutput(),
+        log: logSpy,
+        warn: warnSpy,
+        error: errorSpy,
+      })
+
+      expect(result.status).toBe('failed')
+      expect(result.reason).toBe('http-401')
+      const message = errorSpy.mock.calls[0][0]
+      expect(message).toMatch(/401/)
+      expect(message).toMatch(/octocat\/hello-world/)
+      expect(message).toMatch(/Bad credentials/)
+    })
+
+    it('falls back to the raw text body when the response is not JSON', async () => {
       const mockFetch = vi.fn().mockResolvedValueOnce(
         new Response('Not Found', { status: 404 })
       )
@@ -210,9 +241,31 @@ describe('deriveRepoStartYear', () => {
 
       expect(result.status).toBe('failed')
       expect(result.reason).toBe('http-404')
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/404/)
+      const message = errorSpy.mock.calls[0][0]
+      expect(message).toMatch(/404/)
+      expect(message).toMatch(/Not Found/)
+    })
+
+    it('logs the status and repo without crashing when the body is empty', async () => {
+      const mockFetch = vi.fn().mockResolvedValueOnce(
+        new Response('', { status: 500 })
       )
+
+      const result = await deriveRepoStartYear({
+        fetchImpl: mockFetch as unknown as typeof fetch,
+        env: { GITHUB_REPO: 'octocat/hello-world', GITHUB_TOKEN: 'ghp_test' },
+        outputPath: tempOutput(),
+        log: logSpy,
+        warn: warnSpy,
+        error: errorSpy,
+      })
+
+      expect(result.status).toBe('failed')
+      expect(result.reason).toBe('http-500')
+      const message = errorSpy.mock.calls[0][0]
+      expect(message).toMatch(/500/)
+      expect(message).toMatch(/octocat\/hello-world/)
+      expect(message).not.toMatch(/undefined|null/)
     })
   })
 
