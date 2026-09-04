@@ -14,6 +14,11 @@ import {
 import { applyInsertOnlyTurtlePatch, PatchValidationError } from "../../../src/patch.js";
 import { serializeContainer, formatContainerHtml } from "../../../src/ldp.js";
 import { parseHistoryPath, type HistoryPath } from "../../../src/history.js";
+import {
+  listCommitsForPath,
+  type Commit,
+  type ListCommitsForPathOptions,
+} from "../../../src/github.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -89,12 +94,12 @@ function isHistoryRequest(pathname: string, _context: Context): boolean {
   return /^\/[^/]+\/history(\/|$)/.test(pathname);
 }
 
-function handleHistoryGet(
+async function handleHistoryGet(
   req: Request,
   context: Context,
   corsHeaders: Record<string, string>,
   pathname: string,
-): Response {
+): Promise<Response> {
   const page = context.params.page ?? "";
   const stripped = pathname.replace(/^\/+/, "");
   const prefix = `${page}/history`;
@@ -111,6 +116,25 @@ function handleHistoryGet(
 
   if (parsed.kind === "history_root") {
     return serveHistoryRoot(req, page, corsHeaders);
+  }
+
+  if (parsed.kind === "year") {
+    return await serveYearContainer(
+      req,
+      page,
+      parsed.year,
+      corsHeaders,
+    );
+  }
+
+  if (parsed.kind === "month") {
+    return await serveMonthContainer(
+      req,
+      page,
+      parsed.year,
+      parsed.month,
+      corsHeaders,
+    );
   }
 
   return notFound(corsHeaders);
@@ -137,14 +161,138 @@ function serveHistoryRoot(
     });
   }
 
-  const containerUri = `/${page}/history/`;
+  return renderContainerResponse(
+    req,
+    `/${page}/history/`,
+    `Contents of ${page}/history`,
+    yearEntries,
+    corsHeaders,
+  );
+}
+
+function isInRange(year: number): boolean {
+  const currentYear = new Date().getUTCFullYear();
+  return year >= REPO_START_YEAR && year <= currentYear;
+}
+
+async function serveYearContainer(
+  req: Request,
+  page: string,
+  year: number,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  if (!isInRange(year)) {
+    return notFound(corsHeaders);
+  }
+  const { githubRef } = loadGithubConfig();
+  const commits = await listCommitsForPath({
+    repo: pageRepo(page),
+    token: githubToken(),
+    branch: githubRef,
+    path: page,
+    since: `${year}-01-01T00:00:00Z`,
+    until: `${year}-12-31T23:59:59Z`,
+    perPage: 100
+  });
+
+  const monthsWithCommits = new Set<number>();
+  for (const commit of commits) {
+    const m = monthFromIso(commit.date);
+    if (m !== null) monthsWithCommits.add(m);
+  }
+
+  const monthEntries = [...monthsWithCommits]
+    .sort((a, b) => a - b)
+    .map((m) => ({
+      name: String(m).padStart(2, "0"),
+      path: `${page}/history/${year}/${String(m).padStart(2, "0")}`,
+      type: "dir" as const,
+      sha: ""
+    }));
+
+  return renderContainerResponse(
+    req,
+    `/${page}/history/${year}/`,
+    `Contents of ${page}/history/${year}`,
+    monthEntries,
+    corsHeaders,
+  );
+}
+
+async function serveMonthContainer(
+  req: Request,
+  page: string,
+  year: number,
+  month: number,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  if (!isInRange(year)) {
+    return notFound(corsHeaders);
+  }
+  const lastDay = lastDayOfMonth(year, month);
+  const { githubRef } = loadGithubConfig();
+  const commits = await listCommitsForPath({
+    repo: pageRepo(page),
+    token: githubToken(),
+    branch: githubRef,
+    path: page,
+    since: `${year}-${String(month).padStart(2, "0")}-01T00:00:00Z`,
+    until: `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}T23:59:59Z`,
+    perPage: 100
+  });
+
+  const shortShas = commits
+    .map((c) => c.sha.slice(0, 7))
+    .filter((s, i, arr) => arr.indexOf(s) === i)
+    .sort();
+
+  const entries = shortShas.map((s) => ({
+    name: s,
+    path: `${page}/history/${year}/${String(month).padStart(2, "0")}/${s}`,
+    type: "dir" as const,
+    sha: ""
+  }));
+
+  return renderContainerResponse(
+    req,
+    `/${page}/history/${year}/${String(month).padStart(2, "0")}/`,
+    `Contents of ${page}/history/${year}/${String(month).padStart(2, "0")}`,
+    entries,
+    corsHeaders,
+  );
+}
+
+function pageRepo(page: string): string {
+  return loadGithubConfig().githubRepo;
+}
+
+function githubToken(): string {
+  return loadGithubConfig().githubToken;
+}
+
+function monthFromIso(iso: string): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.getUTCMonth() + 1;
+}
+
+function lastDayOfMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function renderContainerResponse(
+  req: Request,
+  containerUri: string,
+  title: string,
+  entries: { name: string; path: string; type: "dir" | "file" | string; sha: string }[],
+  corsHeaders: Record<string, string>,
+): Response {
   const accept = req.headers.get("Accept") ?? "";
   const wantHtml = accept.includes("text/html") && !accept.includes("text/turtle");
-
   const body = wantHtml
-    ? formatContainerHtml(containerUri, `Contents of ${page}/history`, yearEntries)
-    : serializeContainer(containerUri, yearEntries);
-
+    ? formatContainerHtml(containerUri, title, entries as any)
+    : serializeContainer(containerUri, entries as any);
   const headers: Record<string, string> = {
     ...corsHeaders,
     "Content-Type": wantHtml
@@ -471,7 +619,7 @@ async function handleGet(
   pathname: string,
 ): Promise<Response> {
   if (isHistoryRequest(pathname, context)) {
-    return handleHistoryGet(req, context, corsHeaders, pathname);
+    return await handleHistoryGet(req, context, corsHeaders, pathname);
   }
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
   const isContainer = pathname === "/" || pathname.endsWith("/");

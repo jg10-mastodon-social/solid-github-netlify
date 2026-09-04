@@ -35,6 +35,7 @@ const mockIsPathSafe = vi.fn()
 const mockCommitFileOnBranch = vi.fn()
 const mockGetFileBlobSha = vi.fn()
 const mockListDirectoryFromGitHub = vi.fn()
+const mockListCommitsForPath = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -44,7 +45,8 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     isPathSafe: mockIsPathSafe,
     commitFileOnBranch: mockCommitFileOnBranch,
     getFileBlobSha: mockGetFileBlobSha,
-    listDirectoryFromGitHub: mockListDirectoryFromGitHub
+    listDirectoryFromGitHub: mockListDirectoryFromGitHub,
+    listCommitsForPath: mockListCommitsForPath
   }
 })
 
@@ -2304,5 +2306,228 @@ describe('router history root', () => {
     expect(draftIdx).toBeGreaterThanOrEqual(0)
     expect(catchAllIdx).toBeGreaterThanOrEqual(0)
     expect(draftIdx).toBeLessThan(catchAllIdx)
+  })
+})
+
+describe('router year/month containers', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('GET /foo/history/2026 (in range) calls listCommitsForPath with since/until for the year', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockListCommitsForPath).toHaveBeenCalledTimes(1)
+    const args = mockListCommitsForPath.mock.calls[0][0]
+    expect(args.branch).toBe('HEAD')
+    expect(args.path).toBe('foo')
+    expect(args.since).toBe('2026-01-01T00:00:00Z')
+    expect(args.until).toBe('2026-12-31T23:59:59Z')
+  })
+
+  it('GET /foo/history/2026 emits an LDP container of MM/ children for months with commits', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'a1',
+        message: 'Jan commit',
+        authorName: 'Alice',
+        authorEmail: 'a@x',
+        date: '2026-01-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/a1'
+      },
+      {
+        sha: 'b2',
+        message: 'Aug commit',
+        authorName: 'Bob',
+        authorEmail: 'b@x',
+        date: '2026-08-22T12:00:00Z',
+        htmlUrl: 'https://example/commit/b2'
+      }
+    ] as any)
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<01/>')
+    expect(body).toContain('<08/>')
+    expect(body).not.toContain('<02/>')
+  })
+
+  it('GET /foo/history/2026 with no commits returns an empty LDP container (200 with empty ldp:contains)', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains\s*\./)
+  })
+
+  it('GET /foo/history/2026/08 calls listCommitsForPath with since/until for that month', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026/08', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+    )
+
+    expect(res.status).toBe(200)
+    const args = mockListCommitsForPath.mock.calls[0][0]
+    expect(args.since).toBe('2026-08-01T00:00:00Z')
+    expect(args.until).toBe('2026-08-31T23:59:59Z')
+  })
+
+  it('GET /foo/history/2026/08 emits ldp:contains of <shortSha>/ for each commit in that month', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Aug 1',
+        authorName: 'Alice',
+        authorEmail: 'a@x',
+        date: '2026-08-01T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      },
+      {
+        sha: 'def6789012345',
+        message: 'Aug 22',
+        authorName: 'Bob',
+        authorEmail: 'b@x',
+        date: '2026-08-22T12:00:00Z',
+        htmlUrl: 'https://example/commit/def6789012345'
+      }
+    ] as any)
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026/08', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<abc1234/>')
+    expect(body).toContain('<def6789/>')
+  })
+
+  it('GET /foo/history/2026/08 with no commits returns 200 empty container', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026/08', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains\s*\./)
+  })
+
+  it('year and month containers set Cache-Control max-age=86400', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+
+    const yearReq = new Request('http://localhost/foo/history/2026', {
+      method: 'GET'
+    })
+    const yearRes = await handler(
+      yearReq,
+      makeContext({ params: { page: 'foo', rest: '2026' } })
+    )
+    expect(yearRes.headers.get('Cache-Control')).toMatch(/max-age=86400/)
+
+    const monthReq = new Request('http://localhost/foo/history/2026/08', {
+      method: 'GET'
+    })
+    const monthRes = await handler(
+      monthReq,
+      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+    )
+    expect(monthRes.headers.get('Cache-Control')).toMatch(/max-age=86400/)
+  })
+
+  it('GET /foo/history/2026 with Accept: text/html returns an HTML container', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2026', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2026' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/<!doctype html>/i)
   })
 })
