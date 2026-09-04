@@ -137,6 +137,15 @@ async function handleHistoryGet(
     );
   }
 
+  if (parsed.kind === "commit_folder") {
+    return await serveCommitFolder(
+      req,
+      page,
+      parsed.shortSha,
+      corsHeaders,
+    );
+  }
+
   return notFound(corsHeaders);
 }
 
@@ -287,6 +296,7 @@ function renderContainerResponse(
   title: string,
   entries: { name: string; path: string; type: "dir" | "file" | string; sha: string }[],
   corsHeaders: Record<string, string>,
+  cacheControl: string = "public, max-age=86400, stale-while-revalidate=259200",
 ): Response {
   const accept = req.headers.get("Accept") ?? "";
   const wantHtml = accept.includes("text/html") && !accept.includes("text/turtle");
@@ -298,9 +308,37 @@ function renderContainerResponse(
     "Content-Type": wantHtml
       ? "text/html; charset=utf-8"
       : "text/turtle; charset=utf-8",
-    "Cache-Control": "public, max-age=86400, stale-while-revalidate=259200"
+    "Cache-Control": cacheControl
   };
   return new Response(body, { status: 200, headers });
+}
+
+async function serveCommitFolder(
+  req: Request,
+  page: string,
+  shortSha: string,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  const { githubRepo, githubToken } = loadGithubConfig();
+  const result = await listDirectoryFromGitHub({
+    repo: githubRepo,
+    token: githubToken,
+    ref: shortSha,
+    path: page
+  });
+
+  if (result.status === 404) {
+    return notFound(corsHeaders);
+  }
+
+  return renderContainerResponse(
+    req,
+    `/${page}/`,
+    `Contents of ${page}/history/${shortSha}`,
+    result.entries,
+    corsHeaders,
+    "public, max-age=31536000, immutable",
+  );
 }
 
 function appendVary(existing: string | undefined, value: string): string {

@@ -2531,3 +2531,165 @@ describe('router year/month containers', () => {
     expect(body).toMatch(/<!doctype html>/i)
   })
 })
+
+describe('router commit folder', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('GET /foo/history/<shortSha>/ calls listFolderContentsAtCommit with the SHA and the page folder', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' },
+        { name: 'blog', path: 'foo/blog', type: 'dir', sha: 'sha-2' }
+      ]
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledTimes(1)
+    const args = mockListDirectoryFromGitHub.mock.calls[0][0]
+    expect(args.ref).toBe('abc1234')
+    expect(args.path).toBe('foo')
+  })
+
+  it('emits an LDP container with the immediate children of the page at the commit', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' },
+        { name: 'blog', path: 'foo/blog', type: 'dir', sha: 'sha-2' }
+      ]
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    const body = await res.text()
+    expect(body).toContain('<index.html>')
+    expect(body).toContain('<blog/>')
+  })
+
+  it('emits an empty container (200 with empty ldp:contains) when the commit has no files for the page', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains\s*\./)
+  })
+
+  it('returns 404 when the page folder does not exist at the commit', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      entries: []
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('sets Cache-Control: public, max-age=31536000, immutable', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.headers.get('Cache-Control')).toBe(
+      'public, max-age=31536000, immutable'
+    )
+  })
+
+  it('GET with Accept: text/html returns an HTML container', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' }
+      ]
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/<!doctype html>/i)
+  })
+})
