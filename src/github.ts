@@ -167,6 +167,24 @@ export async function listDirectoryFromGitHub(
   return { status: response.status, entries }
 }
 
+export interface ListFolderContentsAtCommitOptions {
+  repo: string
+  token: string
+  sha: string
+  folder: string
+}
+
+export async function listFolderContentsAtCommit(
+  options: ListFolderContentsAtCommitOptions
+): Promise<GitHubDirectoryResult> {
+  return listDirectoryFromGitHub({
+    repo: options.repo,
+    token: options.token,
+    ref: options.sha,
+    path: options.folder
+  })
+}
+
 function jsonHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,

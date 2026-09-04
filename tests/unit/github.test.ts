@@ -13,6 +13,7 @@ import {
   commitFileOnBranch,
   parseIfMatch,
   listCommitsForPath,
+  listFolderContentsAtCommit,
 } from '../../src/github.js'
 
 function textResponse(body: string, init: ResponseInit = {}): Response {
@@ -1302,6 +1303,151 @@ describe('listCommitsForPath', () => {
         token: 'ghp_test',
         branch: 'main',
         path: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+})
+
+describe('listFolderContentsAtCommit', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('builds the contents URL with ref set to the commit SHA and folder path', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listFolderContentsAtCommit({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      sha: 'abc1234567890abcdef1234567890abcdef12345',
+      folder: 'foo'
+    })
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(
+      'https://api.github.com/repos/octocat/hello-world/contents/foo?ref=abc1234567890abcdef1234567890abcdef12345'
+    )
+    const headers = init.headers as Record<string, string>
+    expect(headers['Accept']).toBe('application/vnd.github+json')
+    expect(headers['Authorization']).toBe('Bearer ghp_test')
+  })
+
+  it('encodes folder path segments', async () => {
+    const fetchMock = mockFetchSequence([jsonResponse([], { status: 200 })])
+
+    await listFolderContentsAtCommit({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      sha: 'abc12345',
+      folder: 'docs/read me'
+    })
+
+    const [url] = fetchMock.mock.calls[0]
+    expect(url).toContain('/contents/docs/read%20me?ref=abc12345')
+  })
+
+  it('parses the immediate children of the folder at the given commit', async () => {
+    mockFetchSequence([
+      jsonResponse(
+        [
+          { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' },
+          { name: 'blog', path: 'foo/blog', type: 'dir', sha: 'sha-2' }
+        ],
+        { status: 200 }
+      )
+    ])
+
+    const result = await listFolderContentsAtCommit({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      sha: 'abc12345',
+      folder: 'foo'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.entries).toEqual([
+      { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' },
+      { name: 'blog', path: 'foo/blog', type: 'dir', sha: 'sha-2' }
+    ])
+  })
+
+  it('returns only immediate children: nested paths from a recursive tree are NOT included', async () => {
+    mockFetchSequence([
+      jsonResponse(
+        [
+          { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' },
+          { name: 'blog', path: 'foo/blog', type: 'dir', sha: 'sha-2' }
+        ],
+        { status: 200 }
+      )
+    ])
+
+    const result = await listFolderContentsAtCommit({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      sha: 'abc12345',
+      folder: 'foo'
+    })
+
+    const childPaths = result.entries.map((e) => e.path)
+    expect(childPaths).not.toContain('foo/blog/post.md')
+    expect(childPaths).not.toContain('foo/blog/2024/index.md')
+    expect(childPaths.every((p) => p.startsWith('foo/'))).toBe(true)
+  })
+
+  it('returns status 404 with empty entries when the folder does not exist at the commit', async () => {
+    mockFetchSequence([new Response('Not Found', { status: 404 })])
+
+    const result = await listFolderContentsAtCommit({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      sha: 'abc12345',
+      folder: 'missing'
+    })
+
+    expect(result.status).toBe(404)
+    expect(result.entries).toEqual([])
+  })
+
+  it('throws GitHubApiError on 5xx upstream', async () => {
+    mockFetchSequence([new Response('boom', { status: 502 })])
+
+    await expect(
+      listFolderContentsAtCommit({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        sha: 'abc12345',
+        folder: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('throws GitHubApiError on 4xx other than 404', async () => {
+    mockFetchSequence([new Response('Unprocessable', { status: 422 })])
+
+    await expect(
+      listFolderContentsAtCommit({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        sha: 'abc12345',
+        folder: 'foo'
+      })
+    ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+
+  it('throws GitHubApiError on network failure', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network down')) as unknown as typeof fetch
+
+    await expect(
+      listFolderContentsAtCommit({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        sha: 'abc12345',
+        folder: 'foo'
       })
     ).rejects.toBeInstanceOf(GitHubApiError)
   })
