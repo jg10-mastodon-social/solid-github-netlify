@@ -4,6 +4,8 @@
   "type": "module",
   "version": "1.0.0",
   "scripts": {
+    "build:config": "node scripts/derive-repo-start-year.mjs",
+    "pretest": "npm run build:config",
     "test": "vitest run",
     "test:unit": "vitest run unit",
     "test:integration": "vitest run integration",

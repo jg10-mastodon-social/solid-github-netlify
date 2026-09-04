@@ -5,3 +5,6 @@ node_modules
 # Local env files
 .env
 .env.local
+
+# Generated build-time artifacts
+netlify/functions/router/repo-start-year.generated.mjs
