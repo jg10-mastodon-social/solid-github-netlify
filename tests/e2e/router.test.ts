@@ -246,3 +246,52 @@ describe('router container listings via netlify dev', () => {
     )
   })
 })
+
+describe('history routes via netlify dev (offline)', () => {
+  it('GET /foo/history invokes the function and serves the year listing (200)', async () => {
+    // The function being invoked (rather than 404 from Netlify routing miss)
+    // is the routing smoke test. The history root makes no GitHub calls, so
+    // it returns 200 with the year listing even in offline mode.
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history`, { method: 'GET' })
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:BasicContainer/)
+  })
+
+  it('GET /foo/history/2026/ invokes the function and serves an empty year container (200)', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/2026/`, { method: 'GET' })
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains\s*\./)
+  })
+
+  it('GET /foo/history/2026/08/ invokes the function and serves an empty month container (200)', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/2026/08/`, { method: 'GET' })
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains\s*\./)
+  })
+
+  it('GET /foo/history/abc1234/ invokes the function and returns 404 (commit folder)', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/abc1234/`, { method: 'GET' })
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /foo/history/abc1234/foo.txt invokes the function and returns 404 (file)', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/abc1234/foo.txt`, { method: 'GET' })
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /foo/history/2024/03/abc1234/foo.txt (bucket-prefixed) invokes the function and returns 404', async () => {
+    const res = await fetchWithRetry(
+      `${devServerUrl}/foo/history/2024/03/abc1234/foo.txt`,
+      { method: 'GET' }
+    )
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /foo/history/draft (no doc) returns 404', async () => {
+    const res = await fetchWithRetry(`${devServerUrl}/foo/history/draft`, { method: 'GET' })
+    expect(res.status).toBe(404)
+  })
+})

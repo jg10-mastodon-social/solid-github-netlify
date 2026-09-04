@@ -89,9 +89,11 @@ function isDraftRequest(pathname: string): boolean {
   return pathname.includes(DRAFT_SUFFIX);
 }
 
-function isHistoryRequest(pathname: string, _context: Context): boolean {
-  if (isDraftRequest(pathname)) return false;
-  return /^\/[^/]+\/history(\/|$)/.test(pathname);
+function isHistoryRequest(pathname: string, context: Context): boolean {
+  if (typeof context.params.rest === "string") {
+    return true;
+  }
+  return /^\/[^/]+\/history\/?$/.test(pathname);
 }
 
 async function handleHistoryGet(
@@ -101,13 +103,7 @@ async function handleHistoryGet(
   pathname: string,
 ): Promise<Response> {
   const page = context.params.page ?? "";
-  const stripped = pathname.replace(/^\/+/, "");
-  const prefix = `${page}/history`;
-  const rest = stripped.startsWith(prefix + "/")
-    ? stripped.slice(prefix.length + 1)
-    : stripped === prefix
-      ? ""
-      : "";
+  const rest = context.params.rest ?? "";
 
   const parsed = parseHistoryPath(rest);
   if (parsed === null) {

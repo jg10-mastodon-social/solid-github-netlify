@@ -71,7 +71,7 @@ function makeContext(overrides: Partial<Context> = {}): Context {
 }
 
 describe('router config', () => {
-  it('declares the draft route first so greedy :page* does not swallow /history/draft/ (regression)', async () => {
+  it('declares the history routes after the draft route so /history/draft/ is not swallowed', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
     expect(config.path).toEqual([
       '/:page*/history/draft/',
