@@ -146,6 +146,16 @@ async function handleHistoryGet(
     );
   }
 
+  if (parsed.kind === "commit_file") {
+    return await serveCommitFile(
+      req,
+      page,
+      parsed.shortSha,
+      parsed.doc,
+      corsHeaders,
+    );
+  }
+
   return notFound(corsHeaders);
 }
 
@@ -339,6 +349,46 @@ async function serveCommitFolder(
     corsHeaders,
     "public, max-age=31536000, immutable",
   );
+}
+
+async function serveCommitFile(
+  req: Request,
+  page: string,
+  shortSha: string,
+  doc: string,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  const { githubRepo, githubToken } = loadGithubConfig();
+  const path = `${page}/${doc}`;
+  if (!isPathSafe(path)) {
+    return new Response("Unsafe path", {
+      status: 400,
+      headers: corsHeaders,
+    });
+  }
+  const result = await fetchFileFromGitHub({
+    repo: githubRepo,
+    token: githubToken,
+    ref: shortSha,
+    path,
+    ifNoneMatch: req.headers.get("if-none-match") ?? undefined
+  });
+
+  const headers: Record<string, string> = {
+    ...corsHeaders,
+    "Cache-Control": "public, max-age=31536000, immutable"
+  };
+  if (result.contentType) headers["Content-Type"] = result.contentType;
+  if (result.etag) headers["ETag"] = result.etag;
+  if (req.headers.get("if-none-match")) {
+    headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
+  }
+
+  const body = result.status === 304 ? null : (result.body as BodyInit);
+  return new Response(body, {
+    status: result.status,
+    headers
+  });
 }
 
 function appendVary(existing: string | undefined, value: string): string {

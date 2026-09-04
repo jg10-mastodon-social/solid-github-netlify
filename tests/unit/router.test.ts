@@ -2693,3 +2693,230 @@ describe('router commit folder', () => {
     expect(body).toMatch(/<!doctype html>/i)
   })
 })
+
+describe('router commit file (SHA-robust)', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('GET /foo/history/<shortSha>/foo.txt calls fetchFileFromGitHub with the SHA as ref and the file path', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('hello'),
+      contentType: 'text/plain; charset=utf-8',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234/foo.txt', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    const args = mockFetchFileFromGitHub.mock.calls[0][0]
+    expect(args.ref).toBe('abc1234')
+    expect(args.path).toBe('foo/foo.txt')
+  })
+
+  it('returns the upstream file body, content-type, and ETag', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('hello'),
+      contentType: 'text/plain; charset=utf-8',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234/foo.txt', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('hello')
+    expect(res.headers.get('Content-Type')).toBe('text/plain; charset=utf-8')
+    expect(res.headers.get('ETag')).toBe('W/"abc"')
+  })
+
+  it('sets Cache-Control: public, max-age=31536000, immutable', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('hello'),
+      contentType: 'text/plain; charset=utf-8',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234/foo.txt', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234/foo.txt' } })
+    )
+
+    expect(res.headers.get('Cache-Control')).toBe(
+      'public, max-age=31536000, immutable'
+    )
+  })
+
+  it('SHA is robust: a wrong year prefix is ignored, the SHA is what gets fetched', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('hello'),
+      contentType: 'text/plain; charset=utf-8',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    // /foo/history/2024/03/<shortSha>/foo.txt — the year and month are
+    // bucket metadata, not data. The fetched ref is the shortSha, the
+    // fetched path is foo/foo.txt. The "wrong" year/month are ignored.
+    const req = new Request('http://localhost/foo/history/2024/03/abc1234/foo.txt', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2024/03/abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(200)
+    const args = mockFetchFileFromGitHub.mock.calls[0][0]
+    expect(args.ref).toBe('abc1234')
+    expect(args.path).toBe('foo/foo.txt')
+  })
+
+  it('SHA is robust: a year-only prefix is also ignored', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('hello'),
+      contentType: 'text/plain; charset=utf-8',
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/2024/abc1234/foo.txt', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '2024/abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(200)
+    const args = mockFetchFileFromGitHub.mock.calls[0][0]
+    expect(args.ref).toBe('abc1234')
+    expect(args.path).toBe('foo/foo.txt')
+  })
+
+  it('handles multi-segment doc paths (e.g. <shortSha>/sub/nested/file.md)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('# Hi'),
+      contentType: 'text/markdown; charset=utf-8',
+      etag: 'W/"def"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request(
+      'http://localhost/foo/history/abc1234/sub/nested/file.md',
+      { method: 'GET' }
+    )
+    const res = await handler(
+      req,
+      makeContext({
+        params: { page: 'foo', rest: 'abc1234/sub/nested/file.md' }
+      })
+    )
+
+    expect(res.status).toBe(200)
+    const args = mockFetchFileFromGitHub.mock.calls[0][0]
+    expect(args.ref).toBe('abc1234')
+    expect(args.path).toBe('foo/sub/nested/file.md')
+  })
+
+  it('returns 404 when GitHub reports a missing file', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: new TextEncoder().encode('Not Found'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234/missing.txt', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234/missing.txt' } })
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('forwards If-None-Match and returns 304 when the upstream returns 304', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 304,
+      body: new TextEncoder().encode(''),
+      contentType: null,
+      etag: 'W/"abc"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234/foo.txt', {
+      method: 'GET',
+      headers: { 'If-None-Match': 'W/"abc"' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234/foo.txt' } })
+    )
+
+    expect(res.status).toBe(304)
+    expect(mockFetchFileFromGitHub.mock.calls[0][0].ifNoneMatch).toBe('W/"abc"')
+  })
+})
