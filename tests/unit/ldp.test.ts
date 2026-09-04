@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { serializeContainer, type ContainerEntry } from '../../src/ldp.js'
+import { serializeContainer, formatContainerHtml, type ContainerEntry } from '../../src/ldp.js'
 
 describe('serializeContainer', () => {
   it('emits the LDP BasicContainer type for the container itself', () => {
@@ -107,5 +107,64 @@ describe('serializeContainer', () => {
     expect(turtle).toMatch(/^<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/m)
     expect(turtle).toContain('<a.txt> a ldp:Resource .')
     expect(turtle).toMatch(/<b\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer \./)
+  })
+})
+
+describe('formatContainerHtml', () => {
+  it('emits a valid HTML5 document with the container title in the heading', () => {
+    const html = formatContainerHtml('/foo/', 'Contents of foo', [
+      { name: 'a.txt', path: 'foo/a.txt', type: 'file', sha: 'sha-a' }
+    ])
+    expect(html).toMatch(/<!doctype html>/i)
+    expect(html).toMatch(/<html[^>]*>/)
+    expect(html).toContain('<title>Contents of foo</title>')
+    expect(html).toMatch(/<h1[^>]*>Contents of foo<\/h1>/)
+  })
+
+  it('emits a links list with one li per child for a non-empty container', () => {
+    const html = formatContainerHtml('/foo/', 'Contents', [
+      { name: 'a.txt', path: 'foo/a.txt', type: 'file', sha: 'sha-a' },
+      { name: 'sub', path: 'foo/sub', type: 'dir', sha: 'sha-b' }
+    ])
+    expect(html).toMatch(/<a href="a\.txt">a\.txt<\/a>/)
+    expect(html).toMatch(/<a href="sub\/?">sub\/<\/a>/)
+  })
+
+  it('marks directory children with a trailing slash in the link text', () => {
+    const html = formatContainerHtml('/foo/', 'Contents', [
+      { name: 'sub', path: 'foo/sub', type: 'dir', sha: 'sha-b' }
+    ])
+    expect(html).toMatch(/<a href="sub\/?">sub\/<\/a>/)
+  })
+
+  it('emits an empty-state message when there are no children', () => {
+    const html = formatContainerHtml('/empty/', 'Contents of empty', [])
+    expect(html).toMatch(/<p[^>]*>[\s\S]*Empty[\s\S]*<\/p>/i)
+  })
+
+  it('escapes HTML in child names to prevent injection', () => {
+    const html = formatContainerHtml('/foo/', 'Contents', [
+      { name: '<script>alert(1)</script>', path: 'foo/<script>alert(1)</script>', type: 'file', sha: 'sha-x' }
+    ])
+    expect(html).not.toContain('<script>alert(1)</script>')
+    expect(html).toMatch(/&lt;script&gt;/)
+  })
+
+  it('escapes HTML in the title', () => {
+    const html = formatContainerHtml('/foo/', '<bad>&"</title>', [])
+    expect(html).not.toContain('<bad>&"<\\/title>')
+    expect(html).toMatch(/&lt;bad&gt;/)
+  })
+
+  it('includes a Content-Type hint or content metadata in a meta tag', () => {
+    const html = formatContainerHtml('/foo/', 'Contents', [])
+    expect(html).toMatch(/<meta[^>]*charset="utf-8"/)
+  })
+
+  it('escapes the href attribute for child names with special characters', () => {
+    const html = formatContainerHtml('/foo/', 'Contents', [
+      { name: 'a b.txt', path: 'foo/a b.txt', type: 'file', sha: 'sha-x' }
+    ])
+    expect(html).toMatch(/<a href="a%20b\.txt">a b\.txt<\/a>/)
   })
 })
