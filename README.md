@@ -42,7 +42,11 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
 npm install
 ```
 
-There is no build step — `netlify.toml` ships with `command = "# no build command"`. The function is deployed as-is from `netlify/functions/router/`.
+```bash
+npm run build:config
+```
+
+Also runs automatically as `netlify.toml`'s `command`, `pretest`, and vitest `globalSetup`. Writes `netlify/functions/router/repo-start-year.generated.mjs` (gitignored). The function itself ships from `netlify/functions/router/` without a TS compile step (Netlify bundles `.mts` directly).
 
 Optional: copy `.env.example` to `.env` and fill in `WRITE_WEBIDS`, `GITHUB_REPO`, `GITHUB_TOKEN`, `GITHUB_REF` for `netlify dev`.
 
@@ -54,6 +58,7 @@ Optional: copy `.env.example` to `.env` and fill in `WRITE_WEBIDS`, `GITHUB_REPO
 | `GITHUB_REPO` | Yes | `owner/repo` form. |
 | `GITHUB_TOKEN` | Yes | GitHub PAT with `contents:write` on `GITHUB_REPO`. |
 | `GITHUB_REF` | No | Ref for public reads and the base for new draft branches (default `HEAD`, which resolves to the repo's default branch on each call). |
+| `REPO_START_YEAR` | No | 4-digit year in `[1900, 2100]`. Used directly if set; otherwise `npm run build:config` resolves it from the GitHub repo (public API for public repos, authenticated with `GITHUB_TOKEN` for private repos), and writes `0` if neither works. |
 
 ## How it works
 
@@ -230,22 +235,6 @@ The commit SHA in the URL is the source of truth. Year and month segments in the
 
 - Year/month containers: `public, max-age=86400, stale-while-revalidate=259200` (1 day fresh, 3 days SWR). New commits can land mid-month; 1 day is a safe upper bound.
 - Commit folder + file responses: `public, max-age=31536000, immutable` (1 year). The URL is the commit, the response cannot change.
-
-#### Build-time REPO_START_YEAR derivation
-
-`scripts/derive-repo-start-year.mjs` is the build step (`netlify.toml`'s `command`). It resolves `REPO_START_YEAR` and writes `netlify/functions/router/repo-start-year.generated.mjs`. The router imports this constant; the file is gitignored and regenerated on every deploy.
-
-**Resolution order:**
-
-1. **`REPO_START_YEAR` env var** — if set to a 4-digit year in `[1900, 2100]`, written as-is. No API call. Use this to bypass GitHub entirely (e.g., for local `netlify deploy` where `--secret` GITHUB_TOKEN is unreadable).
-2. **Public resolution** — `GET https://api.github.com/repos/{owner}/{repo}` with no `Authorization` header. Works for public repos without any token. Result `source: 'public'`.
-3. **Masked-secret error** — if public resolution failed and `GITHUB_TOKEN` is set but contains `*` (the Netlify CLI's masked placeholder for `--secret` vars during local `netlify deploy`), the build fails with an explicit instruction to set `REPO_START_YEAR=<year>` directly or re-set `GITHUB_TOKEN` without `--secret`.
-4. **No-token fallback** — public failed and no token is set. Writes `REPO_START_YEAR = 0` and warns. Build succeeds.
-5. **Authenticated fallback** — public failed and a real token is set. Calls GitHub with `Authorization: Bearer <token>`. Result `source: 'auth'`.
-
-When neither `REPO_START_YEAR` nor `GITHUB_REPO` is set (e.g., `npm test`), the script writes a placeholder `REPO_START_YEAR = 0` so imports never fail. In that mode the year container includes every year from 0 to current — most are empty, but routing still works.
-
-A `pretest` hook in `package.json` and a `vitest globalSetup` in `tests/helpers/build-config-setup.ts` both run the script before tests, so `npm test` and `npx vitest run` both work without manual setup.
 
 ### OPTIONS
 
