@@ -11,6 +11,7 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
 - **Draft GET** `GET /:page*/history/draft/:doc`, `GET /:page*/history/draft/` — file and container reads of `${page}-draft`. Same proxy / listing semantics as the public route; falls back to `GITHUB_REF` on a 404.
   - Auth is optional: if both `Authorization` and `DPoP` headers are present, `verifyDpopToken` against `WRITE_WEBIDS` sets `WAC-Allow` to `user="read write", public="read"` for an authenticated allowlisted WebID, else `user="read", public="read"`.
   - **Missing headers are not an error** — anonymous reads are allowed; the auth check only elevates `WAC-Allow`.
+  - **Not cached** — every draft response carries `Cache-Control: private, no-store` and `Netlify-CDN-Cache-Control: no-store`, because `WAC-Allow` varies per request and a shared cache would leak one user's write capability to another.
 - **Draft PUT** `PUT /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`.
   - Creates the `${page}-draft` branch from `GITHUB_REF` if missing, then commits the file.
   - Honors `If-Match` (sha precondition → 412 on mismatch) and `If-None-Match: *` (create-only → 412 if the path exists on the branch).

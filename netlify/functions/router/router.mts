@@ -34,6 +34,21 @@ function buildWacAllow(
   return `user="${userMode}", public="read"`;
 }
 
+const DRAFT_CACHE_CONTROL = "private, no-store";
+const NETLIFY_CDN_CACHE_CONTROL = "no-store";
+
+function applyDraftHeaders(
+  headers: Record<string, string>,
+  ctx: { authResult: AuthResponse | undefined; writeWebIds: string[] },
+): void {
+  headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+  headers["Allow"] = "GET, PUT, OPTIONS";
+  headers["Accept-Put"] = "*/*";
+  headers["Accept-Patch"] = "text/n3";
+  headers["Cache-Control"] = DRAFT_CACHE_CONTROL;
+  headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
+}
+
 function isShaMismatch(error: unknown): boolean {
   if (!(error instanceof GitHubApiError)) return false;
   if (error.status === 409) return true;
@@ -823,12 +838,9 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
 
     if (result.status === 404) {
       const headers: Record<string, string> = { ...ctx.corsHeaders };
-    if (ctx.draft) {
-      headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
-      headers["Allow"] = "GET, PUT, OPTIONS";
-      headers["Accept-Put"] = "*/*";
-      headers["Accept-Patch"] = "text/n3";
-    }
+      if (ctx.draft) {
+        applyDraftHeaders(headers, ctx);
+      }
       return new Response("Not Found", { status: 404, headers });
     }
 
@@ -841,10 +853,7 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
       headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
     }
     if (ctx.draft) {
-      headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
-      headers["Allow"] = "GET, PUT, OPTIONS";
-      headers["Accept-Put"] = "*/*";
-      headers["Accept-Patch"] = "text/n3";
+      applyDraftHeaders(headers, ctx);
     }
     return new Response(turtle, { status: 200, headers });
   } catch (error) {
@@ -899,15 +908,13 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
     const headers: Record<string, string> = { ...ctx.corsHeaders };
     if (result.contentType) headers["Content-Type"] = result.contentType;
     if (result.etag) headers["ETag"] = result.etag;
-    if (result.cacheControl) headers["Cache-Control"] = result.cacheControl;
     if (ctx.req.headers.get("if-none-match")) {
       headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
     }
     if (ctx.draft) {
-      headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
-      headers["Allow"] = "GET, PUT, OPTIONS";
-      headers["Accept-Put"] = "*/*";
-      headers["Accept-Patch"] = "text/n3";
+      applyDraftHeaders(headers, ctx);
+    } else if (result.cacheControl) {
+      headers["Cache-Control"] = result.cacheControl;
     }
 
     const body = result.status === 304 ? null : (result.body as BodyInit);
@@ -935,7 +942,7 @@ const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match",
   "Access-Control-Expose-Headers":
-    "ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch",
+    "ETag, Cache-Control, Netlify-CDN-Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch",
   Vary: "Origin",
 });
 

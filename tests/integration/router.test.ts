@@ -425,6 +425,8 @@ describe('router GET container listing', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
     expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
       expect.objectContaining({ path: 'foo', ref: 'foo-draft' })
     )

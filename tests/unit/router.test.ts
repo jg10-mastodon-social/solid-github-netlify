@@ -599,6 +599,8 @@ describe('router WAC-Allow on draft GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('returns WAC-Allow with user="read" when no Authorization header is present', async () => {
@@ -609,6 +611,8 @@ describe('router WAC-Allow on draft GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('returns WAC-Allow with user="read" when no DPoP header is present', async () => {
@@ -622,6 +626,8 @@ describe('router WAC-Allow on draft GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('returns WAC-Allow with user="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
@@ -648,6 +654,8 @@ describe('router WAC-Allow on draft GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('returns WAC-Allow with user="read" when verifyDpopToken returns a failure result', async () => {
@@ -669,6 +677,8 @@ describe('router WAC-Allow on draft GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('does not call verifyDpopToken when neither auth header is present', async () => {
@@ -718,6 +728,8 @@ describe('router WAC-Allow on draft GET', () => {
 
     expect(res.status).toBe(304)
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('includes WAC-Allow on 404 Not Found responses (both draft and main miss)', async () => {
@@ -743,6 +755,8 @@ describe('router WAC-Allow on draft GET', () => {
 
     expect(res.status).toBe(404)
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
     expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
   })
 
@@ -771,7 +785,8 @@ describe('router WAC-Allow on draft GET', () => {
     expect(await res.text()).toBe('main-content')
     expect(res.headers.get('Content-Type')).toBe('text/html')
     expect(res.headers.get('ETag')).toBe('"abc123"')
-    expect(res.headers.get('Cache-Control')).toBe('max-age=60')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
     expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
     expect(mockFetchFileFromGitHub.mock.calls[0][0]).toEqual(
@@ -861,6 +876,8 @@ describe('router WAC-Allow on draft GET', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('omits WAC-Allow on 400 Unsafe Path responses', async () => {
@@ -915,6 +932,24 @@ describe('router WAC-Allow omitted on published GET', () => {
     expect(res.headers.get('WAC-Allow')).toBeNull()
   })
 
+  it('does not set Netlify-CDN-Cache-Control on the published route', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('ok'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: 'private, max-age=60'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Cache-Control')).toBe('private, max-age=60')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBeNull()
+  })
+
   it('exposes WAC-Allow via Access-Control-Expose-Headers on the published route CORS preflight', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/bar', { method: 'OPTIONS' })
@@ -922,6 +957,9 @@ describe('router WAC-Allow omitted on published GET', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('WAC-Allow')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain(
+      'Netlify-CDN-Cache-Control'
+    )
   })
 })
 
@@ -1993,6 +2031,8 @@ describe('router GET container listing', () => {
       expect.objectContaining({ path: 'foo', ref: 'foo-draft' })
     )
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('uses the effective page URI (stripped of /history/draft/) as the Turtle subject on draft containers', async () => {
@@ -2061,6 +2101,8 @@ describe('router GET container listing', () => {
       expect.objectContaining({ ref: 'HEAD', path: 'foo' })
     )
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('emits WAC-Allow with user="read write" on draft containers for an authenticated allowlisted WebID', async () => {
@@ -2092,6 +2134,8 @@ describe('router GET container listing', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('omits WAC-Allow on the published container route', async () => {
@@ -2116,6 +2160,8 @@ describe('router GET container listing', () => {
 
     expect(res.status).toBe(404)
     expect(mockListDirectoryFromGitHub).toHaveBeenCalledTimes(2)
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
   it('returns 502 when the upstream listing throws', async () => {
