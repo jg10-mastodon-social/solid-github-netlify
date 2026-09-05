@@ -51,7 +51,7 @@ Optional: copy `.env.example` to `.env` and fill in `WRITE_WEBIDS`, `GITHUB_REPO
 
 ## How it works
 
-Every request handled by the router function logs a single `[router] METHOD /path` entry line at the start (e.g. `[router] PUT /foo/history/draft/bar`). Auth failures additionally log `[auth] DENIED: <reason>` and `[auth] Token iat timestamp is N seconds ahead/behind server time` when the underlying verifier rejects on `iat` clock skew. Grepping for `[router]` or `[auth]` is the fastest way to follow a single request through the function.
+**Debugging:** every request handled by the router function logs a single `[router] METHOD /path` entry line at the start (e.g. `[router] PUT /foo/history/draft/bar`). Auth failures additionally log `[router] ${pathname} auth failed: <message>` followed by an `[auth] DENIED: <reason>` line. When the underlying verifier rejects on `iat` clock skew, an `[auth] Token iat timestamp is N seconds ahead/behind server time` line is emitted as well. Grepping for `[router]` or `[auth]` is the fastest way to follow a single request through the function.
 
 ### Public GET `/:page*/:doc`
 
@@ -79,8 +79,7 @@ Unauthenticated listing of `${GITHUB_REPO}@${GITHUB_REF}:${page}/` as a Turtle `
 Same proxy / listing semantics as the public route, but reads `${page}-draft` (the per-page branch) and falls back to `GITHUB_REF` on a 404. Auth is optional and only affects the `WAC-Allow` response header. The container path is derived from the URL pathname — `/:page*/history/draft/` strips the `/history/draft/` suffix and uses the remaining prefix.
 
 1. Load env; resolve `path`; reject 400 on unsafe path.
-2. If the request carries both `Authorization` and `DPoP` headers, run `verifyDpopToken` against `WRITE_WEBIDS`:
-   - **Debugging:** an auth failure logs `[router] GET ${pathname} auth failed: <message>` and, depending on the underlying verifier error, a `[auth] DENIED: …` line plus a clock-skew note if the failure was an `iat` check. The function returns 401/403 with the verifier's message; anonymous reads (no headers, or one header missing) are not rejected.
+2. If the request carries both `Authorization` and `DPoP` headers, run `verifyDpopToken` against `WRITE_WEBIDS`. Anonymous reads (no headers, or one header missing) are not rejected.
 3. Fetch from `${page}-draft` (file via `fetchFileFromGitHub`; container via `listDirectoryFromGitHub`), forwarding `If-None-Match`. On a 404 (per-page branch missing or never edited), transparently re-fetch from `GITHUB_REF`. The fallback's `ETag`, `Cache-Control`, and `Vary: If-None-Match` are forwarded unchanged — git blob SHAs are content-addressed, so the same content on `main` and a freshly-created `${page}-draft` has the same SHA, and a `PUT` with `If-Match: "<etag>"` against the draft branch will be accepted. If the fallback also 404s, the caller sees 404 with `WAC-Allow`. 5xx is not retried.
 4. Build `WAC-Allow`: `user="read write", public="read"` for an authenticated allowlisted WebID; `user="read", public="read"` for an unauthenticated/anonymous reader. Emitted on every response (200, 304, 404, fallback).
 5. Advertise editing capability via Solid-spec-compliant headers (mirrors CommunitySolidServer's behavior): `Allow: GET, PUT, OPTIONS`, `Accept-Put: */*`, `Accept-Patch: text/n3`. The advertised methods apply to **all** draft GET responses (200/304/404 and the fallback case) — `Accept-Patch: text/n3` is advertised even for non-RDF content-types so clients like `rdflib.js` recognize the resource as editable and route PATCH requests accordingly; the handler then enforces the `.ttl`-only constraint on the actual PATCH.
@@ -91,7 +90,7 @@ Same proxy / listing semantics as the public route, but reads `${page}-draft` (t
 
 Solid-OIDC-authenticated commit to `${page}-draft`.
 
-1. Load `WRITE_WEBIDS`; verify the DPoP token via `verifyDpopToken` (`Authorization`+`DPoP` bound to `PUT`+`req.url`), allow-listed against `WRITE_WEBIDS`; reject 401 if headers missing, 403 if the WebID isn't allowlisted. **Debugging:** a failure logs `[router] PUT ${pathname} auth failed: <message>`. Underlying verifier errors log `[auth] DENIED: <error>` and, on `iat` clock-skew, `[auth] Token iat timestamp is N seconds ahead/behind server time`.
+1. Load `WRITE_WEBIDS`; verify the DPoP token via `verifyDpopToken` (`Authorization`+`DPoP` bound to `PUT`+`req.url`), allow-listed against `WRITE_WEBIDS`; reject 401 if headers missing, 403 if the WebID isn't allowlisted.
 2. Resolve `path = ${page}/${doc}` from `context.params`; reject 400 on unsafe path.
 3. Parse `If-Match` (strip weak prefix `W/` and surrounding quotes — only the first comma-separated value is honored) and detect `If-None-Match: *`; reject 400 if both are present (mutually exclusive).
 4. Load `GITHUB_REPO`/`GITHUB_TOKEN`/`GITHUB_REF`; `branch = ${page}-draft`.
@@ -145,7 +144,7 @@ Requirements enforced by the handler (anything else → 422):
 
 Flow:
 
-1. Load `WRITE_WEBIDS`; verify the DPoP token via `verifyDpopToken` (`Authorization`+`DPoP` bound to `PATCH`+`req.url`), allow-listed against `WRITE_WEBIDS`. **Debugging:** a failure logs `[router] PATCH ${pathname} auth failed: <message>`.
+1. Load `WRITE_WEBIDS`; verify the DPoP token via `verifyDpopToken` (`Authorization`+`DPoP` bound to `PATCH`+`req.url`), allow-listed against `WRITE_WEBIDS`.
 2. Resolve `path = ${page}/${doc}`; reject 400 on unsafe path; reject 405 if the route isn't a draft URL.
 3. Validate that `doc` ends in `.ttl` (case-insensitive). Anything else → 422 "PATCH is only supported on .ttl paths". Note: the GET handler still advertises `Accept-Patch: text/n3` for non-`.ttl` draft URLs so capability discovery is consistent, but the PATCH handler enforces this server-side.
 4. Validate `Content-Type: text/n3` (parameters ignored). Anything else → 415.
