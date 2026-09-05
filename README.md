@@ -267,7 +267,7 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 │   └── patch.ts             # Minimal N3 Patch (M3-insert subset) parser/applier
 ├── tests/
 │   ├── helpers/             # dev-server spawn (port 9999) + build-config setup
-│   ├── unit/                # auth, config, github, history, ldp, router, build-config
+│   ├── unit/                # auth, build-config, config, github, history, ldp, patch, router
 │   ├── integration/         # Router handler tests with mocked deps
 │   └── e2e/                 # Tests against `netlify dev`
 └── LICENSE
