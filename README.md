@@ -219,6 +219,8 @@ The history tree under `/:page*/history/` is an LDP-navigable view of `${GITHUB_
 | `GET /:page/history/<shortSha>/<doc*>` | file content at that commit | 1 (`fetchFileFromGitHub`) |
 | `GET /:page/history/YYYY/MM/<shortSha>/<doc*>` | same as above (year/month prefix ignored) | 1 |
 
+Date-scoped `listCommitsForPath` calls cap at `perPage=100` (the GitHub API's first page). Year/month listings for pages with >100 commits affecting them in a given window are silently truncated — only the first 100 commits are reflected in `<MM>/` or `<shortSha>/` children.
+
 Content negotiation: `Accept: text/turtle` (or absent) → `text/turtle; charset=utf-8`; `Accept: text/html` → `text/html; charset=utf-8`. The HTML form renders a `<ul>` of `<a href>` children, suitable for browser navigation.
 
 #### SHA-robust addressing
