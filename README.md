@@ -253,9 +253,17 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 
 ### Components and trust boundaries
 
-- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface. Stateless across invocations. Route table is declared in the function's exported `config.path` (`/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`, `/:page*/history/:rest*`); the function's exported `config.method` is `PATCH, PUT, GET, OPTIONS` with `preferStatic: true`, so a matching asset in the static `public/` is served first and anything else falls through to the function.
-- **GitHub**: durable storage for file contents. Public reads serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`. Public container listings serve `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`. The history routes additionally use `GET /repos/${repo}/commits?sha=${branch}&path=${path}&since=...&until=...` to enumerate commits and `GET /repos/${repo}/contents/${path}?ref=${shortSha}` to fetch a file at a specific commit. Draft reads and all writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
-- **OIDC issuer**: any issuer can sign DPoP tokens, but only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT. On draft GET, the same allowlist gates the `WAC-Allow` upgrade — anonymous readers (no `Authorization`/`DPoP` headers) and readers with a non-allowlisted WebID both get `user="read", public="read"` (public read is always permitted); only an authenticated allowlisted WebID elevates to `user="read write", public="read"`.
+- **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface; stateless across invocations.
+  - Route table (`config.path`): `/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`, `/:page*/history/:rest*`.
+  - Methods (`config.method`): `PATCH, PUT, GET, OPTIONS` with `preferStatic: true` — matching assets in the static `public/` are served first; everything else falls through to the function.
+- **GitHub**: durable storage for file contents.
+  - Public reads: `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`.
+  - Public container listings: `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`.
+  - History routes: `GET /repos/${repo}/commits?sha=${branch}&path=${path}&since=...&until=...` (enumerate commits) and `GET /repos/${repo}/contents/${path}?ref=${shortSha}` (fetch a file at a specific commit).
+  - Draft reads and writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
+- **OIDC issuer**: any issuer can sign DPoP tokens.
+  - Only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT.
+  - Draft GET: same allowlist gates the `WAC-Allow` upgrade — anonymous readers (no `Authorization`/`DPoP` headers) and non-allowlisted WebIDs both get `user="read", public="read"` (public read is always permitted); only an authenticated allowlisted WebID elevates to `user="read write", public="read"`.
 
 ### Repository layout
 
