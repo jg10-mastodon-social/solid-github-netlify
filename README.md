@@ -14,16 +14,9 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
 - **History** — LDP-navigable view of past commits on `${GITHUB_REF}` affecting `<page>/*`. Path: `/:page*/history[/YYYY[/MM]]/<shortSha>[/<doc*>]`. Bucket levels (year, month) list children within `[REPO_START_YEAR, currentYear]`; year and month are optional when fetching by `<shortSha>`. Bucket levels are `Cache-Control: public, max-age=86400, stale-while-revalidate=259200`; commit-SHA levels are `public, max-age=31536000, immutable`. Years outside the range return 404, empty months return 200 with no children.
 - **CORS** `OPTIONS` — 204 with allow-list `PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
 
-### History route semantics
+**Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
 
-- The history tree is an LDP-navigable view over GitHub's commit history on `${GITHUB_REF}`. No merges or pending writes — those live in `${page}-draft` via the existing draft route.
-- Discovery is bucket-based: year → month → `<shortSha>/` → file. There is no ActivityStreams changelog in this iteration; the LDP tree IS the changelog.
-- All SHA-bearing responses are immutable-cacheable because the commit SHA in the URL identifies the snapshot exactly.
-- All bucket (year/month) responses are bounded by `listCommitsForPath` with `since`/`until` scoping — they paginate only within the requested date range, not the full repo history.
-- `/foo/history/draft` (no `:doc`) returns 404 — the draft route is handled by its own path matcher; the history catch-all only matches non-draft paths.
-- The history container and commit file routes make zero or one GitHub API call per request; the year/month container routes make exactly one. No N+1 enumeration of repo history.
-- **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
-- **Errors** — `GitHubFetchError` (network/5xx) and `GitHubApiError` (4xx) carry the upstream status; 5xx is surfaced as 502, 4xx passes through, 404 passes through.
+**Errors** — `GitHubFetchError` (network/5xx) and `GitHubApiError` (4xx) carry the upstream status; 5xx is surfaced as 502, 4xx passes through, 404 passes through.
 
 ## Prerequisites
 
