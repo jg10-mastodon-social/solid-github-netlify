@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
-  applyInsertOnlyTurtlePatch,
+  applyInsertDeleteTurtlePatch,
   PatchValidationError,
+  PatchConflictError,
 } from '../../src/patch.js'
 
 const PREFIXES = `@prefix solid: <http://www.w3.org/ns/solid/terms#>.
@@ -24,13 +25,13 @@ async function apply(
   body: string,
   existing: string | null,
 ): Promise<{ content: string; contentType: string }> {
-  return applyInsertOnlyTurtlePatch({
+  return applyInsertDeleteTurtlePatch({
     body: bytes(body),
     existing: existing === null ? null : bytes(existing),
   })
 }
 
-describe('applyInsertOnlyTurtlePatch — success cases', () => {
+describe('applyInsertDeleteTurtlePatch — success cases', () => {
   it('applies a single insert to an empty store', async () => {
     const result = await apply(patch('ex:alice ex:knows ex:bob .'), null)
     expect(result.contentType).toBe('text/turtle; charset=utf-8')
@@ -103,12 +104,6 @@ describe('applyInsertOnlyTurtlePatch — rejection cases', () => {
     ).rejects.toBeInstanceOf(PatchValidationError)
   })
 
-  it('rejects when solid:deletes is present', async () => {
-    await expect(
-      apply(patch('ex:a ex:p ex:b .', { deletes: 'ex:c ex:p ex:d' }), null),
-    ).rejects.toBeInstanceOf(PatchValidationError)
-  })
-
   it('rejects when both solid:where and solid:deletes are present', async () => {
     await expect(
       apply(
@@ -165,6 +160,117 @@ _:p2 solid:inserts { ex:c ex:p ex:d } ; a solid:InsertDeletePatch .
     await expect(
       apply(patch('ex:a ex:p ex:b .'), '<<not turtle'),
     ).rejects.toBeInstanceOf(PatchValidationError)
+  })
+})
+
+describe('applyInsertDeleteTurtlePatch — ground delete triples', () => {
+  it('removes a single deleted triple from an existing store', async () => {
+    const existing = `${PREFIXES}ex:alice ex:knows ex:carol .\nex:alice ex:knows ex:bob .\n`
+    const result = await apply(
+      patch('ex:eve ex:knows ex:alice .', { deletes: 'ex:alice ex:knows ex:carol' }),
+      existing,
+    )
+    expect(result.content).not.toMatch(/ex:carol/)
+    expect(result.content).toContain('ex:bob')
+    expect(result.content).toContain('ex:eve')
+  })
+
+  it('removes multiple deleted triples from an existing store', async () => {
+    const existing = `${PREFIXES}
+ex:alice ex:knows ex:carol .
+ex:alice ex:knows ex:bob .
+ex:bob ex:knows ex:carol .
+`
+    const result = await apply(
+      patch(
+        'ex:eve ex:knows ex:alice .',
+        { deletes: 'ex:alice ex:knows ex:carol .\nex:bob ex:knows ex:carol' },
+      ),
+      existing,
+    )
+    expect(result.content).not.toMatch(/ex:carol/)
+    expect(result.content).toContain('ex:eve')
+  })
+
+  it('applies deletes before inserts (deletes-then-inserts order)', async () => {
+    const existing = `${PREFIXES}ex:alice ex:p "old" .\n`
+    const result = await apply(
+      patch('ex:alice ex:p "new" .', { deletes: 'ex:alice ex:p "old"' }),
+      existing,
+    )
+    expect(result.content).not.toMatch(/"old"/)
+    expect(result.content).toMatch(/"new"/)
+  })
+
+  it('applies a deletes-only patch (no inserts) to an existing store', async () => {
+    const existing = `${PREFIXES}
+ex:alice ex:knows ex:carol .
+ex:alice ex:knows ex:bob .
+`
+    const result = await apply(
+      patch('', { deletes: 'ex:alice ex:knows ex:carol .\nex:alice ex:knows ex:bob' }),
+      existing,
+    )
+    expect(result.content).not.toMatch(/ex:carol/)
+    expect(result.content).not.toMatch(/ex:bob/)
+  })
+
+  it('treats an empty solid:deletes formula as a no-op alongside inserts', async () => {
+    const existing = `${PREFIXES}ex:keep ex:p "v" .\n`
+    const result = await apply(patch('ex:new ex:p "x" .'), existing)
+    expect(result.content).toContain('ex:keep')
+    expect(result.content).toContain('ex:new')
+  })
+
+  it('rejects when solid:deletes contains a variable', async () => {
+    await expect(
+      apply(
+        patch('ex:a ex:p ex:b .', { deletes: '?s ex:p ex:carol' }),
+        null,
+      ),
+    ).rejects.toBeInstanceOf(PatchValidationError)
+  })
+
+  it('rejects when solid:deletes contains a blank node', async () => {
+    await expect(
+      apply(patch('ex:a ex:p ex:b .', { deletes: '_:b ex:p ex:carol' }), null),
+    ).rejects.toBeInstanceOf(PatchValidationError)
+  })
+
+  it('returns PatchConflictError when a deleted triple is not in the existing store', async () => {
+    const existing = `${PREFIXES}ex:alice ex:knows ex:carol .\n`
+    await expect(
+      apply(
+        patch('ex:eve ex:knows ex:alice .', { deletes: 'ex:bob ex:knows ex:carol' }),
+        existing,
+      ),
+    ).rejects.toBeInstanceOf(PatchConflictError)
+  })
+
+  it('returns PatchConflictError when deletes are non-empty but existing is null', async () => {
+    await expect(
+      apply(
+        patch('ex:eve ex:p ex:alice .', { deletes: 'ex:bob ex:p ex:carol' }),
+        null,
+      ),
+    ).rejects.toBeInstanceOf(PatchConflictError)
+  })
+})
+
+describe('PatchConflictError', () => {
+  it('has status 409 and a descriptive message', async () => {
+    try {
+      await apply(
+        patch('ex:eve ex:p ex:alice .', { deletes: 'ex:bob ex:p ex:carol' }),
+        `${PREFIXES}ex:alice ex:p ex:carol .\n`,
+      )
+      expect.fail('expected PatchConflictError to be thrown')
+    } catch (e) {
+      expect(e).toBeInstanceOf(PatchConflictError)
+      const err = e as PatchConflictError
+      expect(err.status).toBe(409)
+      expect(err.message.length).toBeGreaterThan(0)
+    }
   })
 })
 

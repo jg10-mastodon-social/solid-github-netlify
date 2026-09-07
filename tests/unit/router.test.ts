@@ -1295,11 +1295,11 @@ describe('router PATCH handler', () => {
     expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 
-  it('returns 422 when the patch body has solid:deletes non-empty', async () => {
+  it('returns 422 when solid:deletes contains a variable', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
-      status: 404,
-      body: textBody(''),
-      contentType: null,
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:p ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
       etag: null,
       cacheControl: null
     })
@@ -1312,11 +1312,115 @@ describe('router PATCH handler', () => {
         authorization: 'DPoP token',
         dpop: 'dpop'
       },
-      body: patchBody('ex:a ex:p ex:b .', { deletes: 'ex:c ex:p ex:d' })
+      body: patchBody('ex:a ex:p ex:b .', { deletes: '?s ex:p ex:carol' })
     })
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
 
     expect(res.status).toBe(422)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 200 with commit info when applying a deletes+inserts patch to an existing .ttl file', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\nex:alice ex:knows ex:bob .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:eve ex:knows ex:alice .', {
+        deletes: 'ex:alice ex:knows ex:carol'
+      })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('ETag')).toBe('"new-blob"')
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    const committed = mockCommitFileOnBranch.mock.calls[0]![0]
+    const decoded = Buffer.from(committed.content, 'base64').toString('utf-8')
+    expect(decoded).not.toMatch(/ex:carol/)
+    expect(decoded).toContain('ex:bob')
+    expect(decoded).toContain('ex:eve')
+  })
+
+  it('returns 200 with commit info when applying a deletes-only patch to an existing .ttl file', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}
+ex:alice ex:knows ex:carol .
+ex:alice ex:knows ex:bob .
+`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('', { deletes: 'ex:alice ex:knows ex:carol .\nex:alice ex:knows ex:bob' })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    const committed = mockCommitFileOnBranch.mock.calls[0]![0]
+    const decoded = Buffer.from(committed.content, 'base64').toString('utf-8')
+    expect(decoded).not.toMatch(/ex:carol/)
+    expect(decoded).not.toMatch(/ex:bob/)
+  })
+
+  it('returns 409 when a delete triple is not present in the existing file', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:eve ex:knows ex:alice .', {
+        deletes: 'ex:bob ex:knows ex:carol'
+      })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(409)
     expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 

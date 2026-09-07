@@ -11,7 +11,11 @@ import {
   listDirectoryFromGitHub,
   parseIfMatch,
 } from "../../../src/github.js";
-import { applyInsertOnlyTurtlePatch, PatchValidationError } from "../../../src/patch.js";
+import {
+  applyInsertDeleteTurtlePatch,
+  PatchValidationError,
+  PatchConflictError,
+} from "../../../src/patch.js";
 import { serializeContainer, formatContainerHtml } from "../../../src/ldp.js";
 import { parseHistoryPath, type HistoryPath } from "../../../src/history.js";
 import {
@@ -646,11 +650,17 @@ async function handlePatch(
 
   let applied: { content: string; contentType: "text/turtle; charset=utf-8" };
   try {
-    applied = await applyInsertOnlyTurtlePatch({ body, existing });
+    applied = await applyInsertDeleteTurtlePatch({ body, existing });
   } catch (e) {
     if (e instanceof PatchValidationError) {
       return new Response(e.message, {
         status: 422,
+        headers: corsHeaders,
+      });
+    }
+    if (e instanceof PatchConflictError) {
+      return new Response(e.message, {
+        status: 409,
         headers: corsHeaders,
       });
     }

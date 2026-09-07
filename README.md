@@ -17,10 +17,10 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
   - Honors `If-Match` (sha precondition → 412 on mismatch) and `If-None-Match: *` (create-only → 412 if the path exists on the branch).
   - `If-Match` and `If-None-Match: *` are mutually exclusive — sending both returns 400.
 - **Draft PATCH** `PATCH /:page*/history/draft/:doc` — Solid-OIDC-authenticated against `WRITE_WEBIDS`.
-  - Accepts `Content-Type: text/n3`; only handles the simplest supported shape — a single `solid:InsertDeletePatch` with non-empty `solid:inserts` and empty/absent `solid:where`/`solid:deletes`. Insert triples must be ground (no blank nodes, no variables).
-  - Flow: fetch existing from `${page}-draft` (404 means "create from empty"), parse as Turtle, add inserts, re-serialize as `text/turtle; charset=utf-8`, commit.
+  - Accepts `Content-Type: text/n3`; handles a single `solid:InsertDeletePatch` with non-empty `solid:inserts` and/or ground `solid:deletes` (no variables) and empty/absent `solid:where`. All insert/delete triples must be ground (no blank nodes, no variables).
+  - Flow: fetch existing from `${page}-draft` (404 means "create from empty"), parse as Turtle, apply deletes-then-inserts, re-serialize as `text/turtle; charset=utf-8`, commit.
   - Honors `If-Match` (sha precondition → 412 on mismatch).
-  - Errors: other `Content-Type` → 415; non-`.ttl` path → 422; validation failure (blank nodes / variables / present `where` or `deletes` / malformed body / multiple patches) → 422; non-draft URL → 405.
+  - Errors: other `Content-Type` → 415; non-`.ttl` path → 422; validation failure (blank nodes / variables / present `where` / malformed body / multiple patches) → 422; delete triple not present in the document → 409; non-draft URL → 405.
 - **History** — LDP-navigable view of past commits on `${GITHUB_REF}` affecting `<page>/*`. Path: `/:page*/history[/YYYY[/MM]]/<shortSha>[/<doc*>]`. Bucket levels (year, month) list children within `[REPO_START_YEAR, currentYear]`; year and month are optional when fetching by `<shortSha>`. Years outside the range return 404, empty months return 200 with no children.
   - Cache: bucket levels `public, max-age=86400, stale-while-revalidate=259200` (1 day fresh, 3 days SWR); commit-SHA levels `public, max-age=31536000, immutable` (the URL is the commit, the response cannot change).
 - **CORS** `OPTIONS` — 204 with allow-list `PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
@@ -131,7 +131,7 @@ When neither precondition is sent, the router still probes the branch for a curr
 
 Solid-OIDC-authenticated N3 Patch pass-through to `${page}-draft`. The router advertises `Accept-Patch: text/n3` on every draft GET so Solid clients (`rdflib.js`, mashlib, etc.) recognize the resource as editable and route PATCH requests through Solid's `solid:InsertDeletePatch` flow.
 
-**Supported patch shape** — only the minimum subset that rdflib.js's single-insert edit produces:
+**Supported patch shape** — the minimum ground-triples subset of [Solid Protocol §5.3.1](https://solidproject.org/TR/protocol#modifying-resources-using-n3-patches). Insert and delete triples are both supported when they contain only ground triples (NamedNode subjects/predicates; NamedNode or Literal objects).
 
 ```turtle
 @prefix solid: <http://www.w3.org/ns/solid/terms#>.
@@ -144,13 +144,26 @@ _:patch
    a solid:InsertDeletePatch .
 ```
 
-Requirements enforced by the handler (anything else → 422):
+A delete example:
+
+```turtle
+@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+@prefix ex: <http://example.org/>.
+
+_:patch
+      solid:deletes {
+        ex:alice ex:knows ex:bob .
+      };
+   a solid:InsertDeletePatch .
+```
+
+Requirements enforced by the handler:
 
 - Exactly **one** resource of type `solid:InsertDeletePatch` in the patch document.
+- At least one of `solid:inserts` or `solid:deletes` must be present and contain at least one triple.
 - `solid:where` predicate present ⇒ the formula must be empty. Solved conditions / variable bindings are **not** supported.
-- `solid:deletes` predicate present ⇒ the formula must be empty. The router does not perform deletions.
-- `solid:inserts` predicate is required and the formula must contain **at least one** ground triple (subject/predicate must be `NamedNode`s; object must be a `NamedNode` or `Literal`).
-- No blank nodes or variables anywhere in `solid:inserts`. (Spec §5.3.1 would require freshly-created blank nodes per insert; the router rejects them as out of scope for the M3-insert subset.)
+- All triples inside `solid:inserts` and `solid:deletes` must be **ground**: subject and predicate are `NamedNode`s; object is a `NamedNode` or `Literal`. No blank nodes, no variables.
+- Every `solid:deletes` triple must already be present in the target document; if any is missing → 409 (per Solid spec §5.3.1: "the dataset does not contain all of these triples"). Deletions are applied before insertions.
 
 Flow:
 
@@ -160,7 +173,7 @@ Flow:
 4. Validate `Content-Type: text/n3` (parameters ignored). Anything else → 415.
 5. Parse `If-Match` if present (strip weak prefix `W/` and surrounding quotes).
 6. Fetch the existing file from `${page}-draft` via `fetchFileFromGitHub`. A 404 means "create from empty"; any other upstream status passes through.
-7. Hand `body` + `existing` to `applyInsertOnlyTurtlePatch` in `src/patch.ts` (see below). Any validation failure throws `PatchValidationError` → 422 with the message.
+7. Hand `body` + `existing` to `applyInsertDeleteTurtlePatch` in `src/patch.ts` (see below). Validation failures throw `PatchValidationError` → 422 with the message; conflict (missing delete target) throws `PatchConflictError` → 409.
 8. Commit the merged turtle to `${page}-draft` via `commitFileOnBranch` with the same `If-Match` handling as PUT. On failure: `GitHubApiError` with status 409 or 422 → 412; other `GitHubApiError` → its status; `GitHubFetchError` / anything else → 502.
 9. Return 200 with `{commit, url, branch, path, etag}` and `ETag: "<contentSha>"`.
 
@@ -169,22 +182,21 @@ Flow:
 A single function:
 
 ```ts
-applyInsertOnlyTurtlePatch({ body, existing }: {
+applyInsertDeleteTurtlePatch({ body, existing }: {
   body: Uint8Array         // raw PATCH body, expected to be text/n3
   existing: Uint8Array | null  // null if the file does not exist yet
 }): Promise<{ content: string; contentType: 'text/turtle; charset=utf-8' }>
 ```
 
-Behavior: parses `body` as N3 (so formulae are preserved as `BlankNode`-rooted sub-graphs), locates the single `solid:InsertDeletePatch` resource, gathers the triples inside its `solid:inserts` formula, validates the constraints listed above, then parses `existing` (if present) as Turtle, adds the insert triples, and serializes the resulting graph back to Turtle. Throws `PatchValidationError` (which has a `.status` of 422) on any validation failure; the router maps that to a 422 response.
+Behavior: parses `body` as N3 (so formulae are preserved as `BlankNode`-rooted sub-graphs), locates the single `solid:InsertDeletePatch` resource, gathers the ground triples inside its `solid:inserts` and `solid:deletes` formulae, validates the constraints listed above, then parses `existing` (if present) as Turtle, removes every delete triple (after verifying each is present — otherwise `PatchConflictError`), adds the insert triples, and serializes the resulting graph back to Turtle. Throws `PatchValidationError` (status 422) on any validation failure; throws `PatchConflictError` (status 409) when a delete triple is not present in the document. The router maps each error class to its status code.
 
 #### Limitations
 
-The router implements the **minimum M3-insert subset only**. The following Solid-spec features are **not** supported and return 422:
+The router implements the **minimum ground-triples subset only**. The following Solid-spec features are **not** supported and return 422 (unless noted otherwise):
 
 - `solid:where` with variable bindings (the BGP solver / variable-substitution machinery from `solidproject/conformance-test-harness` is out of scope here)
-- `solid:deletes` (no deletion is performed; writes are append-only)
-- Blank-node generation in `solid:inserts`
-- Variables in `solid:inserts`
+- Blank-node generation in `solid:inserts` or `solid:deletes`
+- Variables in `solid:inserts` or `solid:deletes`
 - Multi-patch documents (`solid:Patch` resources other than the single `solid:InsertDeletePatch`)
 - Named-graph patches (`solid:from` / `solid:into`)
 - `application/sparql-update` PATCH bodies (would require a SPARQL Update engine)

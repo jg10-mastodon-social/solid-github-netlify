@@ -9,6 +9,14 @@ export class PatchValidationError extends Error {
   }
 }
 
+export class PatchConflictError extends Error {
+  readonly status = 409
+  constructor(message: string) {
+    super(message)
+    this.name = 'PatchConflictError'
+  }
+}
+
 export interface AppliedPatch {
   content: string
   contentType: 'text/turtle; charset=utf-8'
@@ -23,13 +31,13 @@ const SOLID_WHERE = `${SOLID_TERM}where`
 
 const PREFIX_DECL_RE = /(?:@prefix|PREFIX)\s+([A-Za-z][\w-]*)?:\s*<([^>]+)>\s*\./g
 
-export interface ApplyInsertOnlyTurtlePatchOptions {
+export interface ApplyInsertDeleteTurtlePatchOptions {
   body: Uint8Array
   existing: Uint8Array | null
 }
 
-export async function applyInsertOnlyTurtlePatch(
-  opts: ApplyInsertOnlyTurtlePatchOptions,
+export async function applyInsertDeleteTurtlePatch(
+  opts: ApplyInsertDeleteTurtlePatchOptions,
 ): Promise<AppliedPatch> {
   const baseIri = 'http://localhost/'
   const patchText = text(opts.body)
@@ -128,48 +136,36 @@ export async function applyInsertOnlyTurtlePatch(
       'solid:where is not supported in this minimal patch handler.',
     )
   }
-  if (deletes.nonEmpty) {
+  if (!inserts.nonEmpty && !deletes.nonEmpty) {
     throw new PatchValidationError(
-      'solid:deletes is not supported in this minimal patch handler.',
-    )
-  }
-  if (!inserts.present || inserts.graphValue === null) {
-    throw new PatchValidationError(
-      'solid:inserts must be present and non-empty.',
+      'At least one of solid:inserts or solid:deletes must be present and non-empty.',
     )
   }
 
-  const insertsGraphValue = inserts.graphValue!
-  const insertQuads: Quad[] = []
-  for (const q of patchStore) {
-    if (
-      q.graph.termType !== 'DefaultGraph' &&
-      q.graph.value === insertsGraphValue
-    ) {
-      if (
-        q.subject.termType !== 'NamedNode' ||
-        q.predicate.termType !== 'NamedNode' ||
-        (q.object.termType !== 'NamedNode' && q.object.termType !== 'Literal')
-      ) {
-        throw new PatchValidationError(
-          'Insert triples must be ground (no blank nodes, no variables).',
-        )
-      }
-      insertQuads.push(q)
-    }
-  }
-
-  if (insertQuads.length === 0) {
-    throw new PatchValidationError('solid:inserts formula must be non-empty.')
-  }
+  const insertQuads = inserts.nonEmpty
+    ? collectGroundQuads(patchStore, inserts.graphValue!, 'solid:inserts')
+    : []
+  const deleteQuads = deletes.nonEmpty
+    ? collectGroundQuads(patchStore, deletes.graphValue!, 'solid:deletes')
+    : []
 
   let existingStore: Store
   let existingPrefixes: Record<string, string> = {}
   if (opts.existing === null) {
+    if (deleteQuads.length > 0) {
+      throw new PatchConflictError(
+        'Cannot apply solid:deletes to a non-existent document.',
+      )
+    }
     existingStore = new Store()
   } else {
     const existingText = text(opts.existing)
     if (existingText.trim().length === 0) {
+      if (deleteQuads.length > 0) {
+        throw new PatchConflictError(
+          'Cannot apply solid:deletes to an empty document.',
+        )
+      }
       existingStore = new Store()
     } else {
       existingPrefixes = extractPrefixes(existingText)
@@ -189,13 +185,30 @@ export async function applyInsertOnlyTurtlePatch(
     }
   }
 
+  for (const q of deleteQuads) {
+    const matches = existingStore.getQuads(
+      q.subject,
+      q.predicate,
+      q.object,
+      defaultGraph,
+    )
+    if (matches.length === 0) {
+      throw new PatchConflictError(
+        `solid:deletes references a triple not present in the document: <${q.subject.value}> <${q.predicate.value}> ${termForError(q.object)}.`,
+      )
+    }
+  }
+  for (const q of deleteQuads) {
+    existingStore.deleteMatches(q.subject, q.predicate, q.object, defaultGraph)
+  }
+
   for (const q of insertQuads) {
     existingStore.addQuad(
       DataFactory.quad(
         q.subject as ReturnType<typeof DataFactory.namedNode>,
         q.predicate as ReturnType<typeof DataFactory.namedNode>,
         q.object as ReturnType<typeof DataFactory.namedNode> | ReturnType<typeof DataFactory.literal>,
-        DataFactory.defaultGraph(),
+        defaultGraph,
       ),
     )
   }
@@ -215,6 +228,38 @@ export async function applyInsertOnlyTurtlePatch(
     content,
     contentType: 'text/turtle; charset=utf-8',
   }
+}
+
+function collectGroundQuads(
+  patchStore: Store,
+  graphValue: string,
+  label: 'solid:inserts' | 'solid:deletes',
+): Quad[] {
+  const quads: Quad[] = []
+  for (const q of patchStore) {
+    if (q.graph.termType !== 'DefaultGraph' && q.graph.value === graphValue) {
+      if (q.predicate.termType !== 'NamedNode') {
+        continue
+      }
+      if (
+        q.subject.termType !== 'NamedNode' ||
+        (q.object.termType !== 'NamedNode' && q.object.termType !== 'Literal')
+      ) {
+        throw new PatchValidationError(
+          `${label} triples must be ground (no blank nodes, no variables).`,
+        )
+      }
+      quads.push(q)
+    }
+  }
+  return quads
+}
+
+function termForError(term: Quad['object']): string {
+  if (term.termType === 'Literal') {
+    return `"${term.value}"`
+  }
+  return `<${term.value}>`
 }
 
 function text(bytes: Uint8Array): string {
