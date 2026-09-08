@@ -508,3 +508,54 @@ function buildCommitsUrl(options: ListCommitsForPathOptions): string {
   if (typeof options.until === 'string') params.set('until', options.until)
   return `https://api.github.com/repos/${options.repo}/commits?${params.toString()}`
 }
+
+export interface SquashMergeBranchOptions {
+  repo: string
+  token: string
+  base: string
+  head: string
+  commitMessage: string
+}
+
+export interface SquashMergeResult {
+  sha: string
+  htmlUrl: string
+  commitSha: string
+}
+
+export async function squashMergeBranch(
+  options: SquashMergeBranchOptions
+): Promise<SquashMergeResult> {
+  const url = `https://api.github.com/repos/${options.repo}/merges`
+  const headers = jsonHeaders(options.token)
+  headers['Content-Type'] = 'application/json'
+  const body = JSON.stringify({
+    base: options.base,
+    head: options.head,
+    commit_message: options.commitMessage,
+    squash: true
+  })
+
+  let response: Response
+  try {
+    response = await githubFetch(url, { method: 'POST', headers, body }, GitHubApiError)
+  } catch (error) {
+    if (error instanceof GitHubApiError) {
+      if (error.status === 409) {
+        throw new GitHubApiError('Merge conflict', 409)
+      }
+      if (error.status >= 500) {
+        throw new GitHubFetchError(error.message, error.status)
+      }
+    }
+    throw error
+  }
+
+  const data = (await response.json()) as { sha?: string; html_url?: string }
+  const sha = data.sha
+  const htmlUrl = data.html_url
+  if (!sha || !htmlUrl) {
+    throw new GitHubApiError('GitHub merge response missing sha/html_url', 502)
+  }
+  return { sha, htmlUrl, commitSha: sha }
+}

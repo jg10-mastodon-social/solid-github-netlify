@@ -14,6 +14,7 @@ import {
   parseIfMatch,
   listCommitsForPath,
   listFolderContentsAtCommit,
+  squashMergeBranch,
 } from '../../src/github.js'
 
 function textResponse(body: string, init: ResponseInit = {}): Response {
@@ -1450,5 +1451,92 @@ describe('listFolderContentsAtCommit', () => {
         folder: 'foo'
       })
     ).rejects.toBeInstanceOf(GitHubApiError)
+  })
+})
+
+describe('squashMergeBranch', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('POSTs the merges endpoint with base, head, commit_message, and squash: true', async () => {
+    const fetchMock = mockFetchSequence([
+      jsonResponse(
+        { sha: 'abc', html_url: 'https://example/commit/abc', commit_sha: 'abc' },
+        { status: 201 }
+      )
+    ])
+
+    const result = await squashMergeBranch({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      base: 'main',
+      head: 'foo-draft',
+      commitMessage: 'Squash commit message'
+    })
+
+    expect(result).toEqual({
+      sha: 'abc',
+      htmlUrl: 'https://example/commit/abc',
+      commitSha: 'abc'
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.github.com/repos/octocat/hello-world/merges')
+    expect(init.method).toBe('POST')
+    const headers = init.headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer ghp_test')
+    expect(headers['Accept']).toBe('application/vnd.github+json')
+    expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28')
+    expect(headers['User-Agent']).toBe('solid-github-netlify')
+    expect(headers['Content-Type']).toBe('application/json')
+    const body = JSON.parse(init.body as string)
+    expect(body).toEqual({
+      base: 'main',
+      head: 'foo-draft',
+      commit_message: 'Squash commit message',
+      squash: true
+    })
+  })
+
+  it('throws GitHubApiError with status 409 on merge conflict', async () => {
+    mockFetchSequence([new Response('Merge conflict', { status: 409 })])
+
+    try {
+      await squashMergeBranch({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        base: 'main',
+        head: 'foo-draft',
+        commitMessage: 'Squash commit message'
+      })
+      throw new Error('expected squashMergeBranch to throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(GitHubApiError)
+      expect((error as GitHubApiError).status).toBe(409)
+    }
+  })
+
+  it('throws GitHubFetchError with status 502 on network failure', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network down')) as unknown as typeof fetch
+
+    try {
+      await squashMergeBranch({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        base: 'main',
+        head: 'foo-draft',
+        commitMessage: 'Squash commit message'
+      })
+      throw new Error('expected squashMergeBranch to throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(GitHubFetchError)
+      expect((error as GitHubFetchError).status).toBe(502)
+    }
   })
 })
