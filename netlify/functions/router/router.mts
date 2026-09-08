@@ -248,6 +248,20 @@ function serveHistoryRoot(
       sha: ""
     });
   }
+  yearEntries.push(
+    {
+      name: "changelog",
+      path: `${page}/history/changelog`,
+      type: "dir",
+      sha: ""
+    },
+    {
+      name: "draft",
+      path: `${page}/history/draft`,
+      type: "dir",
+      sha: ""
+    }
+  );
 
   return renderContainerResponse(
     req,

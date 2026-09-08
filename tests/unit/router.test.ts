@@ -2722,6 +2722,8 @@ describe('router history root', () => {
     const body = await res.text()
     expect(body).toContain('ldp:BasicContainer')
     expect(body).toMatch(/ldp:contains/)
+    expect(body).toContain('<changelog/>')
+    expect(body).toContain('<draft/>')
   })
 
   it('lists years from REPO_START_YEAR through currentYear as ldp:contains children', async () => {
@@ -2738,6 +2740,50 @@ describe('router history root', () => {
 
     const body = await res.text()
     expect(body).toContain(`<${currentYear}/>`)
+  })
+
+  it('history_root listing includes <changelog/> as an ldp:contains child', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains [^;]*<changelog\/>/)
+    expect(body).toMatch(/<changelog\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
+  })
+
+  it('history_root listing includes <draft/> as an ldp:contains child', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/ldp:contains [^;]*<draft\/>/)
+    expect(body).toMatch(/<draft\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
+  })
+
+  it('history_root listing lists <changelog/> and <draft/> unconditionally without any GitHub API calls', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', { method: 'GET' })
+    await handler(req, makeContext({ params: { page: 'foo', rest: '' } }))
+
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
   })
 
   it('emits a 1-day max-age Cache-Control header', async () => {
@@ -2777,6 +2823,8 @@ describe('router history root', () => {
     const body = await res.text()
     expect(body).toMatch(/<!doctype html>/i)
     expect(body).toMatch(/<ul>/)
+    expect(body).toMatch(/<a href="changelog\/?">changelog\/<\/a>/)
+    expect(body).toMatch(/<a href="draft\/?">draft\/<\/a>/)
   })
 
   it('GET /foo/history/draft (no doc) returns 404', async () => {

@@ -267,7 +267,7 @@ The history tree under `/:page*/history/` is an LDP-navigable view of `${GITHUB_
 
 | URL | Response | Backing API calls |
 |---|---|---|
-| `GET /:page/history` | LDP `BasicContainer` listing years `[REPO_START_YEAR..currentYear]` | **0** |
+| `GET /:page/history` | LDP `BasicContainer` listing years `[REPO_START_YEAR..currentYear]`, plus `<changelog/>` and `<draft/>` as siblings (both are always-listed virtual routes, not files) | **0** |
 | `GET /:page/history/YYYY` (in range) | LDP `BasicContainer` of `<MM>/` for months with commits | 1 (date-scoped `listCommitsForPath`) |
 | `GET /:page/history/YYYY` (out of range) | 404 | 0 |
 | `GET /:page/history/YYYY/MM` | LDP `BasicContainer` of `<shortSha>/` for commits in that month | 1 (date-scoped `listCommitsForPath`) |
