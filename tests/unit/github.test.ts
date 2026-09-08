@@ -15,6 +15,7 @@ import {
   listCommitsForPath,
   listFolderContentsAtCommit,
   squashMergeBranch,
+  deleteBranch,
 } from '../../src/github.js'
 
 function textResponse(body: string, init: ResponseInit = {}): Response {
@@ -1534,6 +1535,63 @@ describe('squashMergeBranch', () => {
         commitMessage: 'Squash commit message'
       })
       throw new Error('expected squashMergeBranch to throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(GitHubFetchError)
+      expect((error as GitHubFetchError).status).toBe(502)
+    }
+  })
+})
+
+describe('deleteBranch', () => {
+  const ORIGINAL_FETCH = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = ORIGINAL_FETCH
+  })
+
+  it('DELETEs /git/refs/heads/{branch} with auth header and resolves on 204', async () => {
+    const fetchMock = mockFetchSequence([new Response(null, { status: 204 })])
+
+    await expect(
+      deleteBranch({ repo: 'octocat/hello-world', token: 'ghp_test', branch: 'foo-draft' })
+    ).resolves.toBeUndefined()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.github.com/repos/octocat/hello-world/git/refs/heads/foo-draft')
+    expect(init.method).toBe('DELETE')
+    const headers = init.headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer ghp_test')
+  })
+
+  it('treats 422 (branch already gone) as success', async () => {
+    mockFetchSequence([new Response('Reference does not exist', { status: 422 })])
+
+    await expect(
+      deleteBranch({ repo: 'octocat/hello-world', token: 'ghp_test', branch: 'foo-draft' })
+    ).resolves.toBeUndefined()
+  })
+
+  it('throws GitHubApiError with the upstream status on other 4xx (e.g. 403)', async () => {
+    mockFetchSequence([new Response('Forbidden', { status: 403 })])
+
+    try {
+      await deleteBranch({ repo: 'octocat/hello-world', token: 'ghp_test', branch: 'foo-draft' })
+      throw new Error('expected deleteBranch to throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(GitHubApiError)
+      expect((error as GitHubApiError).status).toBe(403)
+    }
+  })
+
+  it('throws GitHubFetchError with status 502 on network failure', async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network down')) as unknown as typeof fetch
+
+    try {
+      await deleteBranch({ repo: 'octocat/hello-world', token: 'ghp_test', branch: 'foo-draft' })
+      throw new Error('expected deleteBranch to throw')
     } catch (error) {
       expect(error).toBeInstanceOf(GitHubFetchError)
       expect((error as GitHubFetchError).status).toBe(502)

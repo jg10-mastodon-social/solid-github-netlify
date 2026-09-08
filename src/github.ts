@@ -559,3 +559,28 @@ export async function squashMergeBranch(
   }
   return { sha, htmlUrl, commitSha: sha }
 }
+
+export interface DeleteBranchOptions {
+  repo: string
+  token: string
+  branch: string
+}
+
+export async function deleteBranch(options: DeleteBranchOptions): Promise<void> {
+  const url = `https://api.github.com/repos/${options.repo}/git/refs/heads/${encodeBranch(options.branch)}`
+  const headers = jsonHeaders(options.token)
+
+  try {
+    await githubFetch(url, { method: 'DELETE', headers }, GitHubApiError)
+  } catch (error) {
+    if (error instanceof GitHubApiError) {
+      if (error.status === 422) {
+        return
+      }
+      if (error.status >= 500) {
+        throw new GitHubFetchError(error.message, 502)
+      }
+    }
+    throw error
+  }
+}
