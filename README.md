@@ -23,7 +23,12 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
   - Errors: other `Content-Type` → 415; non-`.ttl` path → 422; validation failure (blank nodes / variables / present `where` / malformed body / multiple patches) → 422; delete triple not present in the document → 409; non-draft URL → 405.
 - **History** — LDP-navigable view of past commits on `${GITHUB_REF}` affecting `<page>/*`. Path: `/:page*/history[/YYYY[/MM]]/<shortSha>[/<doc*>]`. Bucket levels (year, month) list children within `[REPO_START_YEAR, currentYear]`; year and month are optional when fetching by `<shortSha>`. Years outside the range return 404, empty months return 200 with no children.
   - Cache: bucket levels `public, max-age=86400, stale-while-revalidate=259200` (1 day fresh, 3 days SWR); commit-SHA levels `public, max-age=31536000, immutable` (the URL is the commit, the response cannot change).
-- **CORS** `OPTIONS` — 204 with allow-list `PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
+- **Changelog root GET** `GET /:page*/history/changelog/` — unauthenticated. The ActivityPub `as:OrderedCollection` root; lists year sub-containers (301 redirect from the no-slash form).
+- **Changelog year GET** `GET /:page*/history/changelog/YYYY/` — unauthenticated. Lists month sub-containers for that year (301 redirect from the no-slash form).
+- **Changelog month GET** `GET /:page*/history/changelog/YYYY/MM` — unauthenticated. The synthesized activities for that month, inline as an `as:OrderedCollectionPage` with `as:prev`/`as:next` to sibling months.
+- **Changelog month PATCH** `PATCH /:page*/history/changelog/YYYY/MM` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Buffers an edit to the past-month shard on `${page}-draft`. Same `text/n3` patch constraints as the draft PATCH.
+- **Changelog POST** `POST /:page*/history/changelog/` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Publishes a new activity: blank-node `prov:Activity` in Turtle with `rdfs:label` as the commit message (required). One main commit per POST; the draft branch is squash-merged in and deleted.
+- **CORS** `OPTIONS` — 204 with allow-list `POST, PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`.
 
 **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
 
@@ -205,6 +210,55 @@ The router implements the **minimum ground-triples subset only**. The following 
 
 Clients that need full N3 Patch semantics per [Solid Protocol §5.3.1](https://solidproject.org/TR/protocol#modifying-resources-using-n3-patches) should target a Solid server like [CommunitySolidServer](https://github.com/CommunitySolidServer/CommunitySolidServer) instead.
 
+### Changelog POST `POST /:page*/history/changelog/`
+
+Solid-OIDC-authenticated publish trigger for the changelog. Each POST produces exactly one main commit; pending edits (regular draft files and past-month changelog edits) ride along in the squash merge.
+
+1. Load `WRITE_WEBIDS`; verify DPoP token bound to `POST`+`req.url`; reject 401/403.
+2. Validate Content-Type `text/turtle`; reject 415 otherwise.
+3. Validate that the request path is `/<page>/history/changelog/` (trailing slash, root only); reject 405 otherwise.
+4. Parse the body as Turtle. Locate the `as:Create` activity and its `as:object` blank node.
+5. **Require** an `rdfs:label` literal on the activity blank node. Missing → 422 and abort. `rdfs:label` becomes the commit message and is **not** stored in the shard file.
+6. Collect the remaining triples on the activity blank node — these are the **client payload** that will land in `<page>/.changelog/<year>/<month>.ttl` (the activity's identifier becomes `<#current>` in the file).
+7. Look up the predecessor's short SHA via `listCommitsForPath({ perPage: 1 })` — the server determines `prov:used` from the commit history; the client does not supply it.
+8. If the client payload is non-empty, read the current month shard from `GITHUB_REF`, substitute `_:b1` → `<#current>`, append the payload, and `commitFileOnBranch` the result to `${page}-draft`. If the payload is empty, skip the file write entirely — the squash-merge below still creates the commit.
+9. `squashMergeBranch` merges `${page}-draft` → `GITHUB_REF` with the activity's `rdfs:label` as the commit message. The squash carries any other pending edits on the draft branch (regular file edits and past-month changelog edits).
+10. `deleteBranch` removes `${page}-draft` (the branch is recreated on the next edit).
+11. Return 200 with `{commit, url, branch, etag, activity}`.
+
+### Changelog month PATCH `PATCH /:page*/history/changelog/YYYY/MM`
+
+Solid-OIDC-authenticated buffer for past-month changelog edits. Edits the per-month shard file at `<page>/.changelog/<year>/<month>.ttl` on `${page}-draft` (not main) — the edit sits in the draft branch until the next POST drains it via the squash merge.
+
+Same patch constraints as the draft PATCH: ground triples only, no `solid:where`, no blank nodes, no variables. The router validates the path is a month bucket (not root, not year), the file ends in `.ttl`, and the Content-Type is `text/n3`.
+
+### Changelog GETs
+
+GETs read `GITHUB_REF` only (no draft fallback) and synthesize an LDP + ActivityStreams view of the page's commit history. The shard file holds only the client payload — `rdfs:label` and the server-managed triples (`rdf:type`, `prov:generated`, `prov:used`, `prov:endedAtTime`) are all synthesized from commit metadata at read time.
+
+1. Load `GITHUB_REPO`/`GITHUB_TOKEN`/`GITHUB_REF`.
+2. **Root** `/<page>/history/changelog/` — return the synthesized `as:OrderedCollection` with year sub-containers. `as:first`/`as:last` point to the first/last year pages; no `as:items` (items live in month pages). 301 redirect from the no-slash form.
+3. **Year** `/<page>/history/changelog/YYYY/` — return the synthesized `as:OrderedCollectionPage` for that year. `as:partOf` the root; `as:prev`/`as:next` to sibling years; `as:items` lists month-page URIs. 301 redirect from the no-slash form.
+4. **Month** `/<page>/history/changelog/YYYY/MM` — fetch the per-month shard at `<page>/.changelog/<year>/<month>.ttl` from `GITHUB_REF`. Enumerate commits via `listCommitsForPath` (filtered by date range) to get the SHAs, dates, and commit messages. For each commit in chronological order:
+   - Look up the activity's client payload in the shard (subject is `<#<shortSha>>`, except the most recent which is `<#current>` and is resolved to `<#<latestShortSha>>`). Activities with no client payload simply have no triples in the file.
+   - Add synthesized server-managed triples. For example:
+
+     ```turtle
+     <#abc1234>
+         a prov:Activity ;
+         prov:generated <page_url>#abc1234 ;
+         prov:used <page_url>#def5678 ;
+         prov:endedAtTime "2024-03-15T10:30:00Z"^^xsd:dateTime ;
+         rdfs:label "Initial save" ;
+         ex:custom "foo" .
+     ```
+
+     `prov:used` is omitted for the very first commit ever. `rdfs:label` is the commit message (the file holds only the client payload — `ex:custom "foo"` in this example).
+5. Wrap with the LDP + AS envelope (`a ldp:Resource, as:OrderedCollectionPage`, `as:partOf`, `as:prev`/`as:next`, inline `as:items`).
+6. Years/months outside `[REPO_START_YEAR, currentYear]` return 404.
+
+**Drift policy:** main commits are the canonical source for server-managed triples. Force-push to `GITHUB_REF` and history rewrites are not supported; if they happen, GET will reflect the new commit state.
+
 ### History routes (LDP-navigable commit history)
 
 The history tree under `/:page*/history/` is an LDP-navigable view of `${GITHUB_REPO}@${GITHUB_REF}`'s commit history affecting `<page>/*`. It is fully read-only and anonymous; mutations flow through the existing draft route.
@@ -258,14 +312,15 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 │   └── derive-repo-start-year.mjs   # Build-time step: writes REPO_START_YEAR to a generated .mjs
 ├── src/
 │   ├── auth.ts              # DPoP token verification
+│   ├── changelog.ts         # Changelog POST flow + GET synthesis helpers
 │   ├── config.ts            # Env loading (writeWebIds, githubRepo, githubToken, githubRef)
-│   ├── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch + listCommitsForPath
+│   ├── github.ts            # GitHub Contents API + refs helpers + commitFileOnBranch + listCommitsForPath + squashMergeBranch + deleteBranch
 │   ├── history.ts           # parseHistoryPath: pure URL shape -> discriminated union
 │   ├── ldp.ts               # LDP BasicContainer Turtle/HTML serializers
 │   └── patch.ts             # Minimal N3 Patch (M3-insert subset) parser/applier
 ├── tests/
 │   ├── helpers/             # dev-server spawn (port 9999) + build-config setup
-│   ├── unit/                # auth, build-config, config, github, history, ldp, patch, router
+│   ├── unit/                # auth, build-config, changelog, config, github, history, ldp, patch, router
 │   ├── integration/         # Router handler tests with mocked deps
 │   └── e2e/                 # Tests against `netlify dev`
 └── LICENSE
@@ -276,15 +331,17 @@ npm run test:e2e           # Real `netlify dev` on port 9999 (boots in-process)
 ### Components and trust boundaries
 
 - **Netlify function** (`netlify/functions/router/router.mts`): the only externally reachable surface; stateless across invocations.
-  - Route table (`config.path`): `/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`, `/:page*/history/:rest*`.
-  - Methods (`config.method`): `PATCH, PUT, GET, OPTIONS` with `preferStatic: true` — matching assets in the static `public/` are served first; everything else falls through to the function.
+  - Route table (`config.path`): `/`, `/:page*/:doc`, `/:page*/`, `/:page*/history/draft/:doc`, `/:page*/history/draft/`, `/:page*/history/:rest*`, `/:page*/history/changelog/`, `/:page*/history/changelog/:year/`, `/:page*/history/changelog/:year/:month`.
+  - Methods (`config.method`): `POST, PATCH, PUT, GET, OPTIONS` with `preferStatic: true` — matching assets in the static `public/` are served first; everything else falls through to the function.
 - **GitHub**: durable storage for file contents.
   - Public reads: `${GITHUB_REPO}@${GITHUB_REF}:${page}/${doc}` via `GET /repos/${repo}/contents/${path}?ref=${ref}` with `Accept: application/vnd.github.raw`.
   - Public container listings: `${GITHUB_REPO}@${GITHUB_REF}:${page}/` with `Accept: application/vnd.github+json`.
-  - History routes: `GET /repos/${repo}/commits?sha=${branch}&path=${path}&since=...&until=...` (enumerate commits) and `GET /repos/${repo}/contents/${path}?ref=${shortSha}` (fetch a file at a specific commit).
-  - Draft reads and writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT per page.
+  - History routes: `GET /repos/${repo}/commits?sha=${branch}&path=${path}&since=...&until=...` (enumerate commits) and `GET /repos/${repo}/contents/${path}?ref=${shortSha}` (fetch a file at that commit).
+  - Draft reads and writes target `${GITHUB_REPO}@${page}-draft`, which the function creates from `GITHUB_REF` on first PUT/PATCH/POST per page.
+  - Changelog shards are stored at `${GITHUB_REPO}@${GITHUB_REF}:<page>/.changelog/<year>/<month>.ttl`. The first POST for a page creates `${page}-draft`, commits the new current-month shard, squash-merges it into `GITHUB_REF`, and deletes the draft branch.
+  - Squash-merge: `POST /repos/${repo}/merges` with `{ base, head, commit_message, squash: true }`. Merge conflict (HTTP 409 from GitHub) is surfaced as 502.
 - **OIDC issuer**: any issuer can sign DPoP tokens.
-  - Only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT.
+  - Only tokens whose `payload.webid` is in `WRITE_WEBIDS` are accepted on PUT, PATCH, or POST.
   - Draft GET: same allowlist gates the `WAC-Allow` upgrade — anonymous readers (no `Authorization`/`DPoP` headers) and non-allowlisted WebIDs both get `user="read", public="read"` (public read is always permitted); only an authenticated allowlisted WebID elevates to `user="read write", public="read"`.
 
 ### Repository layout
@@ -294,12 +351,13 @@ A typical repo backing this function looks like:
 ```
 ${GITHUB_REPO}/
 ├── main                              # GITHUB_REF (default branch)
-│   ├── foo/bar.txt                   # served by GET /foo/bar (and /foo/history/draft/bar on the draft branch)
+│   ├── foo/bar.txt                   # served by GET /foo/bar
+│   ├── foo/.changelog/              # changelog shards (per-month)
+│   │   └── 2024/03.ttl               # client-supplied triples for the 2024/03 bucket
 │   └── alice/profile.ttl            # served by GET /alice/profile.ttl
-└── foo-draft                         # ${page}-draft branch for the /foo/* subtree
-│   └── bar.txt                       # modified via PUT /foo/history/draft/bar
-└── alice-draft                       # ${page}-draft branch for the /alice/* subtree
-    └── profile.ttl                   # modified via PUT /alice/history/draft/profile.ttl
+└── foo-draft                         # short-lived: created on edit, deleted after the next POST's squash
+    ├── bar.txt                       # pending file edit
+    └── .changelog/2024/03.ttl        # pending changelog edits (past-month PATCHes)
 ```
 
-Each per-page `${page}-draft` branch is created on first PUT and lives until manually deleted. Public reads and draft reads are isolated to their respective branches — there is no merge step in the function; promoting a draft to `GITHUB_REF` is a separate GitHub-side PR/merge operation.
+Each per-page `${page}-draft` branch is created on first PUT/PATCH/POST and lives until the next POST's squash merge deletes it. Public reads and draft reads are isolated to their respective branches; the changelog POST is the only thing that promotes a draft to `GITHUB_REF`, and it does so via a single squash merge. Promoting other draft edits (regular file edits) to `GITHUB_REF` remains a separate GitHub-side PR/merge operation.
