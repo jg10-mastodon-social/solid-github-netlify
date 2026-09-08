@@ -1747,6 +1747,324 @@ ex:alice ex:knows ex:bob .
   })
 })
 
+describe('router changelog month PATCH handler', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockGetFileBlobSha.mockResolvedValue(null)
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  const PREFIXES = `@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+@prefix ex: <http://www.example.org/terms#>.
+`
+  function patchBody(inserts: string, opts: { where?: string; deletes?: string } = {}): string {
+    let body = PREFIXES + '\n_:patch'
+    if (opts.where) body += `\n      solid:where { ${opts.where} };`
+    if (opts.deletes) body += `\n      solid:deletes { ${opts.deletes} };`
+    body += `\n      solid:inserts { ${inserts} };\n   a solid:InsertDeletePatch .\n`
+    return body
+  }
+
+  it('returns 405 when PATCH is sent to /:page/history/changelog/ (no year/month)', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 405 when PATCH is sent to /:page/history/changelog/<year>/ (no month)', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/' } })
+    )
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 when DPoP auth fails', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'invalid token'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(401)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 415 when Content-Type is not text/n3', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/sparql-update',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(415)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when the URL does not end in .ttl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(422)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 200 with commit info when applying an insert patch to an existing shard', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:eve ex:knows ex:alice .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('ETag')).toBe('"new-blob"')
+    expect(res.headers.get('Content-Type')).toContain('application/json')
+    const body = await res.json()
+    expect(body.commit).toBe('commit-sha')
+    expect(body.branch).toBe('foo-draft')
+    expect(body.path).toBe('foo/.changelog/2024/03.ttl')
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    const committed = mockCommitFileOnBranch.mock.calls[0]![0]
+    expect(committed.branch).toBe('foo-draft')
+    expect(committed.path).toBe('foo/.changelog/2024/03.ttl')
+    expect(committed.message).toBe('PATCH foo/.changelog/2024/03.ttl via solid-github-netlify')
+    const decoded = Buffer.from(committed.content, 'base64').toString('utf-8')
+    expect(decoded).toContain('ex:eve')
+    expect(decoded).toContain('ex:alice')
+    expect(decoded).toContain('ex:carol')
+  })
+
+  it('returns 200 with commit info when creating a new shard from a missing file', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    const committed = mockCommitFileOnBranch.mock.calls[0]![0]
+    expect(committed.sha).toBeUndefined()
+    expect(committed.branch).toBe('foo-draft')
+    expect(committed.path).toBe('foo/.changelog/2024/03.ttl')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo/.changelog/2024/03.ttl', ref: 'foo-draft' })
+    )
+  })
+
+  it('returns 422 on malformed body', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: 'this is not valid n3'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(422)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when a delete triple is not present in the existing shard', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:eve ex:knows ex:alice .', {
+        deletes: 'ex:bob ex:knows ex:carol'
+      })
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(409)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when the constructed path is unsafe', async () => {
+    mockIsPathSafe.mockReturnValueOnce(false)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo%2F..%2Fbar/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:a ex:p ex:b .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo/../bar', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(400)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+})
+
 describe('router CORS preflight advertises If-Match', () => {
   it('includes If-Match in Access-Control-Allow-Headers on OPTIONS', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
