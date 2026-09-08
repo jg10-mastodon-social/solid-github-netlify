@@ -10,6 +10,8 @@ import {
   isPathSafe,
   listDirectoryFromGitHub,
   parseIfMatch,
+  squashMergeBranch,
+  deleteBranch,
 } from "../../../src/github.js";
 import {
   applyInsertDeleteTurtlePatch,
@@ -23,6 +25,11 @@ import {
   type Commit,
   type ListCommitsForPathOptions,
 } from "../../../src/github.js";
+import {
+  ChangelogValidationError,
+  extractCreateActivity,
+  appendCurrentClientTriples,
+} from "../../../src/changelog.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -82,6 +89,15 @@ export default async (req: Request, context: Context) => {
         return await handleChangelogMonthPatch(req, context, corsHeaders, pathname);
       }
       return await handlePatch(req, context, corsHeaders, pathname);
+    }
+    if (req.method === "POST") {
+      if (pathname.endsWith("/history/changelog/")) {
+        return await handleChangelogPost(req, context, corsHeaders, pathname);
+      }
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: corsHeaders,
+      });
     }
     if (req.method === "GET") {
       return handleGet(req, context, corsHeaders, pathname);
@@ -902,6 +918,229 @@ async function handleChangelogMonthPatch(
   }
 }
 
+async function handleChangelogPost(
+  req: Request,
+  context: Context,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Promise<Response> {
+  const { writeWebIds } = loadWriteConfig();
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+
+  const authResult = await verifyDpopToken(
+    authHeader,
+    dpopHeader,
+    req.url,
+    "POST",
+    writeWebIds,
+  );
+
+  if (!authResult.success) {
+    console.log(
+      `[router] POST ${pathname} auth failed: ${authResult.message}`,
+    );
+    return new Response(authResult.message, {
+      status: authResult.statusCode,
+      headers: corsHeaders,
+    });
+  }
+
+  if (!pathname.endsWith("/history/changelog/")) {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
+
+  const { page } = context.params;
+  if (!page) {
+    return new Response("Unsafe path", {
+      status: 400,
+      headers: corsHeaders,
+    });
+  }
+
+  const contentTypeHeader = req.headers.get("content-type");
+  const contentTypeBase = contentTypeHeader?.split(";")[0]?.trim().toLowerCase();
+  if (contentTypeBase !== "text/turtle") {
+    return new Response("POST requires Content-Type: text/turtle", {
+      status: 415,
+      headers: corsHeaders,
+    });
+  }
+
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const monthPadded = String(month).padStart(2, "0");
+  const shardPath = `${page}/.changelog/${year}/${monthPadded}.ttl`;
+
+  if (year < REPO_START_YEAR || !isPathSafe(shardPath)) {
+    return new Response("Not Found", {
+      status: 404,
+      headers: corsHeaders,
+    });
+  }
+
+  const { githubRepo, githubToken, githubRef } = loadGithubConfig();
+  const branch = `${page}-draft`;
+
+  const body = await req.text();
+
+  let extracted: ReturnType<typeof extractCreateActivity>;
+  try {
+    extracted = extractCreateActivity(body);
+  } catch (e) {
+    if (e instanceof ChangelogValidationError) {
+      return new Response(e.message, {
+        status: 422,
+        headers: corsHeaders,
+      });
+    }
+    throw e;
+  }
+
+  let existing = "";
+  try {
+    const cur = await fetchFileFromGitHub({
+      repo: githubRepo,
+      token: githubToken,
+      ref: githubRef,
+      path: shardPath,
+    });
+    if (cur.status === 200) {
+      existing = new TextDecoder().decode(cur.body);
+    } else if (cur.status !== 404) {
+      return new Response(`Upstream returned ${cur.status}`, {
+        status: cur.status,
+        headers: corsHeaders,
+      });
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: corsHeaders,
+    });
+  }
+
+  try {
+    const commits = await listCommitsForPath({
+      repo: githubRepo,
+      token: githubToken,
+      branch: githubRef,
+      path: page,
+      perPage: 1,
+    });
+    if (commits.length > 0) {
+      commits[0]!.sha.slice(0, 7);
+    }
+  } catch (error) {
+    if (
+      error instanceof GitHubApiError ||
+      error instanceof GitHubFetchError
+    ) {
+      throw error;
+    }
+    throw error;
+  }
+
+  const { content, appended } = await appendCurrentClientTriples({
+    existing,
+    activityQuads: extracted.activityQuads,
+    blankNode: extracted.blankNode,
+  });
+
+  if (appended) {
+    try {
+      await commitFileOnBranch({
+        repo: githubRepo,
+        token: githubToken,
+        baseRef: githubRef,
+        branch,
+        path: shardPath,
+        content: Buffer.from(content, "utf-8").toString("base64"),
+        message: extracted.message,
+      });
+    } catch (error) {
+      if (isShaMismatch(error)) {
+        return new Response("If-Match failed", {
+          status: 412,
+          headers: corsHeaders,
+        });
+      }
+      if (error instanceof GitHubApiError) {
+        return new Response(error.message, {
+          status: error.status,
+          headers: corsHeaders,
+        });
+      }
+      const message =
+        error instanceof Error ? error.message : String(error);
+      return new Response(message, {
+        status: 502,
+        headers: corsHeaders,
+      });
+    }
+  }
+
+  let squashResult: { sha: string; htmlUrl: string; commitSha: string };
+  try {
+    squashResult = await squashMergeBranch({
+      repo: githubRepo,
+      token: githubToken,
+      base: githubRef,
+      head: branch,
+      commitMessage: extracted.message,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: corsHeaders,
+    });
+  }
+
+  try {
+    await deleteBranch({
+      repo: githubRepo,
+      token: githubToken,
+      branch,
+    });
+  } catch (error) {
+    if (!(error instanceof GitHubApiError) || error.status !== 422) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      return new Response(message, {
+        status: 502,
+        headers: corsHeaders,
+      });
+    }
+  }
+
+  return new Response(
+    JSON.stringify({
+      commit: squashResult.sha,
+      url: squashResult.htmlUrl,
+      branch: githubRef,
+      path: shardPath,
+      etag: squashResult.commitSha,
+      activity: squashResult.sha.slice(0, 7),
+    }),
+    {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        ETag: `"${squashResult.commitSha}"`,
+      },
+    },
+  );
+}
+
 async function handleGet(
   req: Request,
   context: Context,
@@ -1129,7 +1368,7 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
 
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin ?? "*",
-  "Access-Control-Allow-Methods": "PATCH, PUT, GET, OPTIONS",
+  "Access-Control-Allow-Methods": "PATCH, PUT, GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match",
   "Access-Control-Expose-Headers":
@@ -1146,6 +1385,6 @@ export const config: Config = {
     "/:page*/:doc",
     "/",
   ],
-  method: ["PATCH", "PUT", "GET", "OPTIONS"],
+  method: ["PATCH", "PUT", "GET", "POST", "OPTIONS"],
   preferStatic: true,
 };

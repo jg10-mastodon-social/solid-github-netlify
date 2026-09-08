@@ -36,6 +36,8 @@ const mockCommitFileOnBranch = vi.fn()
 const mockGetFileBlobSha = vi.fn()
 const mockListDirectoryFromGitHub = vi.fn()
 const mockListCommitsForPath = vi.fn()
+const mockSquashMergeBranch = vi.fn()
+const mockDeleteBranch = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -46,9 +48,26 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     commitFileOnBranch: mockCommitFileOnBranch,
     getFileBlobSha: mockGetFileBlobSha,
     listDirectoryFromGitHub: mockListDirectoryFromGitHub,
-    listCommitsForPath: mockListCommitsForPath
+    listCommitsForPath: mockListCommitsForPath,
+    squashMergeBranch: mockSquashMergeBranch,
+    deleteBranch: mockDeleteBranch
   }
 })
+
+const mockExtractCreateActivity = vi.fn()
+const mockAppendCurrentClientTriples = vi.fn()
+
+vi.mock('../../src/changelog.js', () => ({
+  ChangelogValidationError: class extends Error {
+    readonly status = 422
+    constructor(message: string) {
+      super(message)
+      this.name = 'ChangelogValidationError'
+    }
+  },
+  extractCreateActivity: mockExtractCreateActivity,
+  appendCurrentClientTriples: mockAppendCurrentClientTriples
+}))
 
 function makeContext(overrides: Partial<Context> = {}): Context {
   return {
@@ -83,10 +102,10 @@ describe('router config', () => {
     ])
   })
 
-  it('accepts PUT, GET, OPTIONS and PATCH methods', async () => {
+  it('accepts PUT, GET, OPTIONS, PATCH and POST methods', async () => {
     const { config } = await import('../../netlify/functions/router/router.mts')
-    expect(config.method).toEqual(expect.arrayContaining(['PUT', 'GET', 'OPTIONS', 'PATCH']))
-    expect(config.method).toHaveLength(4)
+    expect(config.method).toEqual(expect.arrayContaining(['PUT', 'GET', 'OPTIONS', 'PATCH', 'POST']))
+    expect(config.method).toHaveLength(5)
   })
 
   it('sets preferStatic to true so static assets win', async () => {
@@ -3493,5 +3512,363 @@ describe('router PUT rejection on commit-addressed URLs', () => {
     )
 
     expect(res.status).toBe(405)
+  })
+})
+
+describe('router changelog POST handler', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockGetFileBlobSha.mockResolvedValue(null)
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+    mockSquashMergeBranch.mockReset()
+    mockDeleteBranch.mockReset()
+    mockExtractCreateActivity.mockReset()
+    mockAppendCurrentClientTriples.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockListCommitsForPath.mockResolvedValue([])
+
+    mockExtractCreateActivity.mockReturnValue({
+      blankNode: '_:b1',
+      activityQuads: [{ subject: { value: '_:b1' }, predicate: { value: 'p' }, object: { value: 'o' } }] as any,
+      message: 'Initial save'
+    })
+    mockAppendCurrentClientTriples.mockResolvedValue({
+      content: 'sparql-prefix-stuff',
+      appended: true
+    })
+    mockSquashMergeBranch.mockResolvedValue({
+      sha: 'merged-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/merged-sha',
+      commitSha: 'merged-sha'
+    })
+    mockCommitFileOnBranch.mockResolvedValue({
+      commitSha: 'committed-blob',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/blob',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+    mockDeleteBranch.mockResolvedValue(undefined)
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  function postContext() {
+    return makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+  }
+
+  it('returns 405 when POST is sent to a non-changelog URI', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <http://example/C> .'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockSquashMergeBranch).not.toHaveBeenCalled()
+    expect(mockDeleteBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 405 when POST is sent to a changelog month URI', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <http://example/C> .'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(405)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 when DPoP auth fails', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'invalid token'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <http://example/C> .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(401)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockSquashMergeBranch).not.toHaveBeenCalled()
+    expect(mockDeleteBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 415 when Content-Type is not text/turtle', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/sparql-update',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <http://example/C> .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(415)
+    expect(mockExtractCreateActivity).not.toHaveBeenCalled()
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 with "rdfs:label" in the message when the activity has no label', async () => {
+    const { ChangelogValidationError } = await import('../../src/changelog.js')
+    mockExtractCreateActivity.mockImplementationOnce(() => {
+      throw new ChangelogValidationError('Commit message (rdfs:label) is required on the activity.')
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <http://example/C> .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(422)
+    expect(await res.text()).toContain('rdfs:label')
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 with "Invalid Turtle body" on malformed body', async () => {
+    const { ChangelogValidationError } = await import('../../src/changelog.js')
+    mockExtractCreateActivity.mockImplementationOnce(() => {
+      throw new ChangelogValidationError('Invalid Turtle body: bad syntax')
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: 'this is not valid turtle <<<'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(422)
+    expect(await res.text()).toContain('Invalid Turtle body')
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when the body has no as:Create activity', async () => {
+    const { ChangelogValidationError } = await import('../../src/changelog.js')
+    mockExtractCreateActivity.mockImplementationOnce(() => {
+      throw new ChangelogValidationError('No as:Create activity in body.')
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#something> <http://example/p> "o" .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(422)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 200 with commit info on a successful publish (empty shard + payload)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'def5678901234abcd',
+        message: 'predecessor',
+        authorName: 'Alice',
+        authorEmail: 'alice@example',
+        date: '2026-01-01T00:00:00Z',
+        htmlUrl: 'https://example/commit/def5678'
+      }
+    ])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: `<#create> a <https://www.w3.org/ns/activitystreams#Create> ;
+               <https://www.w3.org/ns/activitystreams#object> _:b1 .
+              _:b1 <http://www.w3.org/2000/01/rdf-schema#label> "Initial save" ;
+                   <http://example.org/custom> "foo" .`
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('ETag')).toBe('"merged-sha"')
+    expect(res.headers.get('Content-Type')).toContain('application/json')
+
+    const now = new Date()
+    const year = now.getUTCFullYear()
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0')
+    const expectedPath = `foo/.changelog/${year}/${month}.ttl`
+
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    const committed = mockCommitFileOnBranch.mock.calls[0]![0]
+    expect(committed.branch).toBe('foo-draft')
+    expect(committed.path).toBe(expectedPath)
+    expect(committed.message).toBe('Initial save')
+    expect(committed.baseRef).toBe('HEAD')
+    expect(committed.content).toBe(Buffer.from('sparql-prefix-stuff', 'utf-8').toString('base64'))
+
+    expect(mockSquashMergeBranch).toHaveBeenCalledTimes(1)
+    expect(mockSquashMergeBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base: 'HEAD',
+        head: 'foo-draft',
+        commitMessage: 'Initial save'
+      })
+    )
+
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(1)
+    expect(mockDeleteBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'foo-draft' })
+    )
+
+    const body = await res.json()
+    expect(body.commit).toBe('merged-sha')
+    expect(body.url).toBe('https://github.com/octocat/hello-world/commit/merged-sha')
+    expect(body.branch).toBe('HEAD')
+    expect(body.path).toBe(expectedPath)
+    expect(body.etag).toBe('merged-sha')
+    expect(body.activity).toBe('merged-')
+  })
+
+  it('returns 200 on a successful publish with empty payload (no commit, but squash and delete happen)', async () => {
+    mockExtractCreateActivity.mockReturnValueOnce({
+      blankNode: '_:b1',
+      activityQuads: [],
+      message: 'no payload'
+    })
+    mockAppendCurrentClientTriples.mockResolvedValueOnce({
+      content: 'sparql-prefix-stuff',
+      appended: false
+    })
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <https://www.w3.org/ns/activitystreams#Create> ; <https://www.w3.org/ns/activitystreams#object> _:b1 .\n_:b1 <http://www.w3.org/2000/01/rdf-schema#label> "no payload" .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockSquashMergeBranch).toHaveBeenCalledTimes(1)
+    expect(mockSquashMergeBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ commitMessage: 'no payload' })
+    )
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns 200 on a successful publish when the shard already exists', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`<#previous> <http://example.org/custom> "before" .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: 'W/"existing"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: `<#create> a <https://www.w3.org/ns/activitystreams#Create> ;
+               <https://www.w3.org/ns/activitystreams#object> _:b1 .
+              _:b1 <http://www.w3.org/2000/01/rdf-schema#label> "Initial save" ;
+                   <http://example.org/custom> "foo" .`
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    const committed = mockCommitFileOnBranch.mock.calls[0]![0]
+    expect(committed.content).toBe(Buffer.from('sparql-prefix-stuff', 'utf-8').toString('base64'))
+    expect(committed.message).toBe('Initial save')
   })
 })
