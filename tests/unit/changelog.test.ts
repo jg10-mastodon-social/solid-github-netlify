@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { DataFactory, Parser } from 'n3'
 import type { Quad } from '@rdfjs/types'
+import type { Commit } from '../../src/github.js'
 import {
   extractCreateActivity,
   appendCurrentClientTriples,
+  synthesizeActivityTriples,
   ChangelogValidationError,
 } from '../../src/changelog.js'
 
@@ -247,5 +249,149 @@ describe('appendCurrentClientTriples', () => {
     expect(q.subject.value).toBe(CURRENT_NODE)
     expect(q.predicate.value).toBe(`${EX}custom`)
     expect(q.object.value).toBe('foo')
+  })
+})
+
+const PROV_ACTIVITY = 'http://www.w3.org/ns/prov#Activity'
+const PROV_GENERATED = 'http://www.w3.org/ns/prov#generated'
+const PROV_USED = 'http://www.w3.org/ns/prov#used'
+const PROV_ENDED = 'http://www.w3.org/ns/prov#endedAtTime'
+const XSD_DATE_TIME = 'http://www.w3.org/2001/XMLSchema#dateTime'
+const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label'
+
+function findQuad(quads: Quad[], predicate: string): Quad | undefined {
+  return quads.find((q) => q.predicate.value === predicate)
+}
+
+describe('synthesizeActivityTriples', () => {
+  it('happy path with predecessor: emits subject, type, generated, used, endedAtTime, label', () => {
+    const commit: Commit = {
+      sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
+      message: 'Initial save',
+      date: '2024-03-15T10:30:00Z',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      htmlUrl: 'https://github.com/foo/bar/commit/abc1234',
+    }
+    const result = synthesizeActivityTriples({
+      commit,
+      pageUrl: 'https://example.com/foo',
+      prevShortSha: 'def5678',
+    })
+
+    expect(result.subject).toBe('https://example.com/foo#abc1234')
+    expect(result.quads).toHaveLength(5)
+
+    const typeQ = findQuad(result.quads, 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type')
+    expect(typeQ).toBeDefined()
+    expect(typeQ!.subject.value).toBe(result.subject)
+    expect(typeQ!.object.termType).toBe('NamedNode')
+    expect(typeQ!.object.value).toBe(PROV_ACTIVITY)
+
+    const generatedQ = findQuad(result.quads, PROV_GENERATED)
+    expect(generatedQ).toBeDefined()
+    expect(generatedQ!.subject.value).toBe(result.subject)
+    expect(generatedQ!.object.termType).toBe('NamedNode')
+    expect(generatedQ!.object.value).toBe('https://example.com/foo#abc1234')
+
+    const usedQ = findQuad(result.quads, PROV_USED)
+    expect(usedQ).toBeDefined()
+    expect(usedQ!.subject.value).toBe(result.subject)
+    expect(usedQ!.object.termType).toBe('NamedNode')
+    expect(usedQ!.object.value).toBe('https://example.com/foo#def5678')
+
+    const endedQ = findQuad(result.quads, PROV_ENDED)
+    expect(endedQ).toBeDefined()
+    expect(endedQ!.subject.value).toBe(result.subject)
+    const endedObj = endedQ!.object
+    expect(endedObj.termType).toBe('Literal')
+    if (endedObj.termType !== 'Literal') throw new Error('not literal')
+    expect(endedObj.value).toBe('2024-03-15T10:30:00Z')
+    expect(endedObj.datatype.value).toBe(XSD_DATE_TIME)
+
+    const labelQ = findQuad(result.quads, RDFS_LABEL)
+    expect(labelQ).toBeDefined()
+    expect(labelQ!.subject.value).toBe(result.subject)
+    expect(labelQ!.object.termType).toBe('Literal')
+    expect(labelQ!.object.value).toBe('Initial save')
+  })
+
+  it('first commit (no predecessor): omits prov:used', () => {
+    const commit: Commit = {
+      sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
+      message: 'First commit',
+      date: '2024-03-15T10:30:00Z',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      htmlUrl: 'https://github.com/foo/bar/commit/abc1234',
+    }
+    const result = synthesizeActivityTriples({
+      commit,
+      pageUrl: 'https://example.com/foo',
+      prevShortSha: null,
+    })
+
+    expect(result.subject).toBe('https://example.com/foo#abc1234')
+    expect(result.quads).toHaveLength(4)
+    expect(findQuad(result.quads, PROV_USED)).toBeUndefined()
+  })
+
+  it('derives shortSha as the first 7 chars of commit.sha', () => {
+    const commit: Commit = {
+      sha: 'abcdefghijklmnopqrstuvwxyz0123456789abcd',
+      message: 'msg',
+      date: '2024-01-01T00:00:00Z',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      htmlUrl: 'https://github.com/foo/bar/commit/abcdefg',
+    }
+    const result = synthesizeActivityTriples({
+      commit,
+      pageUrl: 'https://example.com/foo',
+      prevShortSha: null,
+    })
+
+    expect(result.subject).toBe('https://example.com/foo#abcdefg')
+    expect(result.subject.endsWith('#abcdefg')).toBe(true)
+  })
+
+  it('uses the provided pageUrl in the subject', () => {
+    const commit: Commit = {
+      sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
+      message: 'msg',
+      date: '2024-01-01T00:00:00Z',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      htmlUrl: 'https://github.com/foo/bar/commit/abc1234',
+    }
+    const result = synthesizeActivityTriples({
+      commit,
+      pageUrl: 'https://other.org/bar',
+      prevShortSha: null,
+    })
+
+    expect(result.subject.startsWith('https://other.org/bar#')).toBe(true)
+    expect(result.subject).toBe('https://other.org/bar#abc1234')
+  })
+
+  it('prov:generated equals the activity subject', () => {
+    const commit: Commit = {
+      sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
+      message: 'msg',
+      date: '2024-01-01T00:00:00Z',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      htmlUrl: 'https://github.com/foo/bar/commit/abc1234',
+    }
+    const result = synthesizeActivityTriples({
+      commit,
+      pageUrl: 'https://example.com/foo',
+      prevShortSha: 'def5678',
+    })
+
+    const generatedQ = findQuad(result.quads, PROV_GENERATED)
+    expect(generatedQ).toBeDefined()
+    expect(generatedQ!.object.termType).toBe('NamedNode')
+    expect(generatedQ!.object.value).toBe(result.subject)
   })
 })

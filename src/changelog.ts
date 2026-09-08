@@ -1,5 +1,6 @@
 import { Parser, Writer, Store, DataFactory } from 'n3'
 import type { Quad } from '@rdfjs/types'
+import type { Commit } from './github.js'
 
 export class ChangelogValidationError extends Error {
   readonly status = 422
@@ -22,6 +23,11 @@ const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
 const AS_CREATE = 'https://www.w3.org/ns/activitystreams#Create'
 const AS_OBJECT = 'https://www.w3.org/ns/activitystreams#object'
 const RDFS_LABEL = 'http://www.w3.org/2000/01/rdf-schema#label'
+const PROV_ACTIVITY = 'http://www.w3.org/ns/prov#Activity'
+const PROV_GENERATED = 'http://www.w3.org/ns/prov#generated'
+const PROV_USED = 'http://www.w3.org/ns/prov#used'
+const PROV_ENDED = 'http://www.w3.org/ns/prov#endedAtTime'
+const XSD_DATE_TIME = 'http://www.w3.org/2001/XMLSchema#dateTime'
 
 /**
  * Parses a Turtle POST body for the changelog publish endpoint.
@@ -172,4 +178,80 @@ export async function appendCurrentClientTriples(
   })
 
   return { content, appended: true }
+}
+
+export interface SynthesizeOptions {
+  /** The commit that produced this activity. */
+  commit: Commit
+  /** The public URL of the page, e.g. 'https://example.com/foo'. No trailing slash. */
+  pageUrl: string
+  /** The short SHA of the predecessor commit, or null if this is the first commit ever. */
+  prevShortSha: string | null
+}
+
+export interface SynthesizeResult {
+  /** The IRI of the activity, `<pageUrl>#<shortSha>`. */
+  subject: string
+  /** The synthesized server-managed triples. */
+  quads: Quad[]
+}
+
+/**
+ * Synthesizes the server-managed triples for one activity from commit
+ * metadata. The activity's subject is `<pageUrl>#<shortSha>`. The
+ * synthesized triples are:
+ *   - rdf:type prov:Activity
+ *   - prov:generated <pageUrl>#<shortSha>
+ *   - prov:used <pageUrl>#<prevShortSha>  (omitted when prevShortSha is null)
+ *   - prov:endedAtTime "<commit.date>"^^xsd:dateTime
+ *   - rdfs:label "<commit.message>"
+ *
+ * The `shortSha` is derived by slicing `commit.sha` to its first 7
+ * characters (matching the existing history-route convention).
+ */
+export function synthesizeActivityTriples(
+  options: SynthesizeOptions,
+): SynthesizeResult {
+  const { commit, pageUrl, prevShortSha } = options
+  const shortSha = commit.sha.slice(0, 7)
+  const subject = `${pageUrl}#${shortSha}`
+  const subjectNode = DataFactory.namedNode(subject)
+
+  const quads: Quad[] = [
+    DataFactory.quad(
+      subjectNode,
+      DataFactory.namedNode(RDF_TYPE),
+      DataFactory.namedNode(PROV_ACTIVITY),
+    ),
+    DataFactory.quad(
+      subjectNode,
+      DataFactory.namedNode(PROV_GENERATED),
+      DataFactory.namedNode(subject),
+    ),
+  ]
+
+  if (prevShortSha !== null) {
+    quads.push(
+      DataFactory.quad(
+        subjectNode,
+        DataFactory.namedNode(PROV_USED),
+        DataFactory.namedNode(`${pageUrl}#${prevShortSha}`),
+      ),
+    )
+  }
+
+  quads.push(
+    DataFactory.quad(
+      subjectNode,
+      DataFactory.namedNode(PROV_ENDED),
+      DataFactory.literal(commit.date, DataFactory.namedNode(XSD_DATE_TIME)),
+    ),
+    DataFactory.quad(
+      subjectNode,
+      DataFactory.namedNode(RDFS_LABEL),
+      DataFactory.literal(commit.message),
+    ),
+  )
+
+  return { subject, quads }
 }
