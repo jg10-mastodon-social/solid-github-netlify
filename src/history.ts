@@ -4,6 +4,9 @@ export type HistoryPathKind =
   | 'month'
   | 'commit_folder'
   | 'commit_file'
+  | 'changelog_root'
+  | 'changelog_year'
+  | 'changelog_month'
 
 export interface HistoryPathBase {
   kind: HistoryPathKind
@@ -36,12 +39,30 @@ export interface CommitFilePath extends HistoryPathBase {
   doc: string
 }
 
+export interface ChangelogRoot extends HistoryPathBase {
+  kind: 'changelog_root'
+}
+
+export interface ChangelogYearPath extends HistoryPathBase {
+  kind: 'changelog_year'
+  year: number
+}
+
+export interface ChangelogMonthPath extends HistoryPathBase {
+  kind: 'changelog_month'
+  year: number
+  month: number
+}
+
 export type HistoryPath =
   | HistoryRoot
   | YearPath
   | MonthPath
   | CommitFolderPath
   | CommitFilePath
+  | ChangelogRoot
+  | ChangelogYearPath
+  | ChangelogMonthPath
 
 const YEAR_RE = /^\d{4}$/
 const MONTH_RE = /^\d{2}$/
@@ -59,6 +80,11 @@ export function parseHistoryPath(rest: string): HistoryPath | null {
   }
 
   const segments = rest.split('/')
+
+  if (segments[0] === 'changelog') {
+    return parseChangelogSegments(segments)
+  }
+
   for (const seg of segments) {
     if (UNSAFE_SEGMENTS.has(seg)) return null
   }
@@ -81,6 +107,46 @@ function parseSingleSegment(seg: string): HistoryPath | null {
   if (SHA_RE.test(seg)) {
     return { kind: 'commit_folder', shortSha: seg }
   }
+  return null
+}
+
+function parseChangelogSegments(segments: string[]): HistoryPath | null {
+  const trimmed =
+    segments.length > 1 && segments[segments.length - 1] === ''
+      ? segments.slice(0, -1)
+      : segments
+
+  for (const seg of trimmed) {
+    if (UNSAFE_SEGMENTS.has(seg)) return null
+  }
+
+  if (trimmed.length === 1) {
+    return { kind: 'changelog_root' }
+  }
+
+  const yearSeg = trimmed[1]!
+  if (!YEAR_RE.test(yearSeg)) {
+    return null
+  }
+  const year = Number(yearSeg)
+
+  if (trimmed.length === 2) {
+    return { kind: 'changelog_year', year }
+  }
+
+  const monthSeg = trimmed[2]!
+  if (!MONTH_RE.test(monthSeg)) {
+    return null
+  }
+  const month = Number(monthSeg)
+  if (month < 1 || month > 12) {
+    return null
+  }
+
+  if (trimmed.length === 3) {
+    return { kind: 'changelog_month', year, month }
+  }
+
   return null
 }
 

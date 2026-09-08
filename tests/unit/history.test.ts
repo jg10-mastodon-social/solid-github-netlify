@@ -195,4 +195,72 @@ describe('parseHistoryPath', () => {
       expect(parseHistoryPath('2026/1234')).toBeNull()
     })
   })
+
+  describe('parseHistoryPath changelog paths', () => {
+    it('parses "changelog" as changelog_root', () => {
+      expect(parseHistoryPath('changelog')).toEqual({ kind: 'changelog_root' })
+    })
+
+    it('parses "changelog/" (trailing slash) as changelog_root', () => {
+      expect(parseHistoryPath('changelog/')).toEqual({ kind: 'changelog_root' })
+    })
+
+    it('parses "changelog/2024" as changelog_year', () => {
+      expect(parseHistoryPath('changelog/2024')).toEqual({
+        kind: 'changelog_year',
+        year: 2024
+      })
+    })
+
+    it('parses "changelog/2024/" (trailing slash) as changelog_year', () => {
+      expect(parseHistoryPath('changelog/2024/')).toEqual({
+        kind: 'changelog_year',
+        year: 2024
+      })
+    })
+
+    it('parses "changelog/2024/03" as changelog_month', () => {
+      expect(parseHistoryPath('changelog/2024/03')).toEqual({
+        kind: 'changelog_month',
+        year: 2024,
+        month: 3
+      })
+    })
+
+    it('parses "changelog/2024/03/" (trailing slash) as changelog_month', () => {
+      expect(parseHistoryPath('changelog/2024/03/')).toEqual({
+        kind: 'changelog_month',
+        year: 2024,
+        month: 3
+      })
+    })
+
+    it('rejects "changelog/abc" (non-numeric year)', () => {
+      expect(parseHistoryPath('changelog/abc')).toBeNull()
+    })
+
+    it('rejects "changelog/2024/abc" (non-numeric month)', () => {
+      expect(parseHistoryPath('changelog/2024/abc')).toBeNull()
+    })
+
+    it('rejects "changelog/2024/13" (month out of range, upper bound)', () => {
+      expect(parseHistoryPath('changelog/2024/13')).toBeNull()
+    })
+
+    it('rejects "changelog/2024/00" (month out of range, lower bound)', () => {
+      expect(parseHistoryPath('changelog/2024/00')).toBeNull()
+    })
+
+    it('rejects "changelog/2024/03/extra" (too many segments)', () => {
+      expect(parseHistoryPath('changelog/2024/03/extra')).toBeNull()
+    })
+
+    it('rejects "changelog//2024" (empty/unsafe segment)', () => {
+      expect(parseHistoryPath('changelog//2024')).toBeNull()
+    })
+
+    it('rejects "changelog/draft" (year segment "draft" is invalid)', () => {
+      expect(parseHistoryPath('changelog/draft')).toBeNull()
+    })
+  })
 })
