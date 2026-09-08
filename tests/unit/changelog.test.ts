@@ -1,8 +1,33 @@
 import { describe, it, expect } from 'vitest'
+import { DataFactory, Parser } from 'n3'
+import type { Quad } from '@rdfjs/types'
 import {
   extractCreateActivity,
+  appendCurrentClientTriples,
   ChangelogValidationError,
 } from '../../src/changelog.js'
+
+const BASE_IRI = 'http://localhost/'
+const EX = 'http://example.org/'
+const B1 = `${BASE_IRI}#b1`
+const CURRENT_NODE = `${BASE_IRI}#current`
+
+function makeQuad(
+  subjectIri: string,
+  predicateIri: string,
+  objectValue: string,
+  literal = true,
+): Quad {
+  return DataFactory.quad(
+    DataFactory.namedNode(subjectIri),
+    DataFactory.namedNode(predicateIri),
+    literal ? DataFactory.literal(objectValue) : DataFactory.namedNode(objectValue),
+  )
+}
+
+function parseShard(content: string): Quad[] {
+  return new Parser({ format: 'text/turtle', baseIRI: BASE_IRI }).parse(content)
+}
 
 describe('extractCreateActivity', () => {
   it('parses a minimal Create activity with one client triple', () => {
@@ -106,5 +131,121 @@ describe('ChangelogValidationError', () => {
     expect(err.status).toBe(422)
     expect(err.name).toBe('ChangelogValidationError')
     expect(err.message).toBe('boom')
+  })
+})
+
+describe('appendCurrentClientTriples', () => {
+  it('appends a single activity quad to an empty shard, rewriting the subject to <#current>', async () => {
+    const result = await appendCurrentClientTriples({
+      existing: '',
+      activityQuads: [makeQuad(B1, `${EX}custom`, 'foo')],
+      blankNode: B1,
+    })
+
+    expect(result.appended).toBe(true)
+    const quads = parseShard(result.content)
+    expect(quads).toHaveLength(1)
+    expect(quads[0]!.subject.value).toBe(CURRENT_NODE)
+    expect(quads[0]!.subject.value).not.toBe(B1)
+    expect(quads[0]!.predicate.value).toBe(`${EX}custom`)
+    expect(quads[0]!.object.value).toBe('foo')
+  })
+
+  it('appends to a non-empty shard preserving both old and new triples', async () => {
+    const result = await appendCurrentClientTriples({
+      existing: `<#existing> <${EX}foo> "bar" .`,
+      activityQuads: [makeQuad(B1, `${EX}new`, 'baz')],
+      blankNode: B1,
+    })
+
+    expect(result.appended).toBe(true)
+    const quads = parseShard(result.content)
+    expect(quads).toHaveLength(2)
+    const bySubj = new Map(quads.map((q) => [q.subject.value, q]))
+    expect(bySubj.has(`${BASE_IRI}#existing`)).toBe(true)
+    expect(bySubj.has(CURRENT_NODE)).toBe(true)
+    expect(bySubj.get(`${BASE_IRI}#existing`)!.object.value).toBe('bar')
+    expect(bySubj.get(CURRENT_NODE)!.object.value).toBe('baz')
+  })
+
+  it('returns existing unchanged with appended=false when activityQuads is empty', async () => {
+    const existing = `<#existing> <${EX}foo> "bar" .`
+    const result = await appendCurrentClientTriples({
+      existing,
+      activityQuads: [],
+      blankNode: B1,
+    })
+
+    expect(result.appended).toBe(false)
+    expect(result.content).toBe(existing)
+  })
+
+  it('appends multiple activity quads all with <#current> subject', async () => {
+    const activityQuads = [
+      makeQuad(B1, `${EX}foo`, '1'),
+      makeQuad(B1, `${EX}bar`, '2'),
+      makeQuad(B1, `${EX}baz`, '3'),
+    ]
+    const result = await appendCurrentClientTriples({
+      existing: '',
+      activityQuads,
+      blankNode: B1,
+    })
+
+    expect(result.appended).toBe(true)
+    const quads = parseShard(result.content)
+    expect(quads).toHaveLength(3)
+    for (const q of quads) {
+      expect(q.subject.value).toBe(CURRENT_NODE)
+      expect(q.subject.value).not.toBe(B1)
+    }
+    const values = quads.map((q) => q.object.value).sort()
+    expect(values).toEqual(['1', '2', '3'])
+  })
+
+  it('handles the case where the subject is already <#current> (no-op rewrite)', async () => {
+    const result = await appendCurrentClientTriples({
+      existing: '',
+      activityQuads: [makeQuad(CURRENT_NODE, `${EX}foo`, 'bar')],
+      blankNode: CURRENT_NODE,
+    })
+
+    expect(result.appended).toBe(true)
+    const quads = parseShard(result.content)
+    expect(quads).toHaveLength(1)
+    expect(quads[0]!.subject.value).toBe(CURRENT_NODE)
+    expect(quads[0]!.predicate.value).toBe(`${EX}foo`)
+    expect(quads[0]!.object.value).toBe('bar')
+  })
+
+  it('throws ChangelogValidationError with "Invalid existing shard" on malformed existing', async () => {
+    const activityQuads = [makeQuad(B1, `${EX}custom`, 'foo')]
+    const opts = {
+      existing: '<<not turtle',
+      activityQuads,
+      blankNode: B1,
+    }
+    await expect(appendCurrentClientTriples(opts)).rejects.toThrow(
+      ChangelogValidationError,
+    )
+    await expect(appendCurrentClientTriples(opts)).rejects.toThrow(
+      /Invalid existing shard/,
+    )
+  })
+
+  it('round-trips: appended content parses back to the expected quad', async () => {
+    const result = await appendCurrentClientTriples({
+      existing: '',
+      activityQuads: [makeQuad(B1, `${EX}custom`, 'foo')],
+      blankNode: B1,
+    })
+
+    expect(result.appended).toBe(true)
+    const reparsed = parseShard(result.content)
+    expect(reparsed).toHaveLength(1)
+    const q = reparsed[0]!
+    expect(q.subject.value).toBe(CURRENT_NODE)
+    expect(q.predicate.value).toBe(`${EX}custom`)
+    expect(q.object.value).toBe('foo')
   })
 })

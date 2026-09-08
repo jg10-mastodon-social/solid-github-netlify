@@ -1,4 +1,4 @@
-import { Parser, DataFactory } from 'n3'
+import { Parser, Writer, Store, DataFactory } from 'n3'
 import type { Quad } from '@rdfjs/types'
 
 export class ChangelogValidationError extends Error {
@@ -110,4 +110,66 @@ export function extractCreateActivity(body: string): ExtractedCreateActivity {
     activityQuads,
     message,
   }
+}
+
+export interface AppendCurrentClientTriplesOptions {
+  /** The existing shard content as a UTF-8 string. May be empty. */
+  existing: string
+  /** The activity's client triples (already filtered to exclude rdfs:label by extractCreateActivity). */
+  activityQuads: Quad[]
+  /** The blank-node subject from extractCreateActivity that should be rewritten to `<#current>`. */
+  blankNode: string
+}
+
+export interface AppendedShard {
+  /** The new shard content as a UTF-8 string (Turtle). */
+  content: string
+  /** Whether anything was actually appended (false when activityQuads is empty). */
+  appended: boolean
+}
+
+/**
+ * Reads `existing` (Turtle, may be empty), substitutes the activity's
+ * blank-node subject for `<#current>` in `activityQuads`, appends those
+ * quads to the parsed store, and returns the serialized Turtle.
+ *
+ * If `activityQuads` is empty, returns `existing` unchanged with appended=false.
+ */
+export async function appendCurrentClientTriples(
+  options: AppendCurrentClientTriplesOptions,
+): Promise<AppendedShard> {
+  const { existing, activityQuads } = options
+
+  if (activityQuads.length === 0) {
+    return Promise.resolve({ content: existing, appended: false })
+  }
+
+  const baseIri = 'http://localhost/'
+  const currentSubject = DataFactory.namedNode(`${baseIri}#current`)
+
+  let existingQuads: Quad[]
+  try {
+    const parser = new Parser({ format: 'text/turtle', baseIRI: baseIri })
+    existingQuads = parser.parse(existing)
+  } catch (e) {
+    throw new ChangelogValidationError(
+      `Invalid existing shard: ${(e as Error).message}`,
+    )
+  }
+
+  const store = new Store(existingQuads)
+  for (const q of activityQuads) {
+    store.addQuad(
+      DataFactory.quad(currentSubject, q.predicate, q.object, q.graph),
+    )
+  }
+
+  const writer = new Writer({ format: 'text/turtle', prefixes: {} })
+  writer.addQuads([...store])
+
+  const content = await new Promise<string>((resolve, reject) => {
+    writer.end((err, result) => (err ? reject(err) : resolve(result)))
+  })
+
+  return { content, appended: true }
 }
