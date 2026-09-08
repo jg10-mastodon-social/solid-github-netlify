@@ -5,7 +5,18 @@ export interface ContainerEntry {
   sha: string
 }
 
+export interface AsCollectionOptions {
+  kind: 'ordered_collection' | 'ordered_collection_page'
+  partOf?: string
+  first?: string
+  last?: string
+  prev?: string
+  next?: string
+  items?: string[]
+}
+
 const LDP_NS = 'http://www.w3.org/ns/ldp#'
+const AS_NS = 'https://www.w3.org/ns/activitystreams#'
 
 function turtleEscape(value: string): string {
   let out = value
@@ -114,13 +125,42 @@ export function formatContainerHtml(
   return body.join('\n') + '\n'
 }
 
-export function serializeContainer(containerUri: string, entries: ContainerEntry[]): string {
+export function serializeContainer(
+  containerUri: string,
+  entries: ContainerEntry[],
+  as?: AsCollectionOptions
+): string {
   const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path))
-  const lines: string[] = [`@prefix ldp: <${LDP_NS}> .`, '']
+  const lines: string[] = [`@prefix ldp: <${LDP_NS}> .`]
+  if (as) lines.push(`@prefix as: <${AS_NS}> .`)
+  lines.push('')
+
   const children = sorted.map((e) => `<${turtleEscape(relativeChildPath(containerUri, e))}>`)
-  lines.push(`<> a ${containerType()}${children.length === 0 ? ' .' : ' ;'}`)
-  if (children.length > 0) {
-    lines.push(`   ldp:contains ${children.join(', ')} .`)
+
+  const asTypeName =
+    as?.kind === 'ordered_collection' ? 'OrderedCollection' : 'OrderedCollectionPage'
+  const typeList = as
+    ? `ldp:Container, ldp:BasicContainer, as:${asTypeName}`
+    : containerType()
+
+  const tail: string[] = []
+  if (children.length > 0) tail.push(`   ldp:contains ${children.join(', ')}`)
+  if (as) {
+    if (as.partOf) tail.push(`   as:partOf <${as.partOf}>`)
+    if (as.first) tail.push(`   as:first <${as.first}>`)
+    if (as.last) tail.push(`   as:last <${as.last}>`)
+    if (as.prev) tail.push(`   as:prev <${as.prev}>`)
+    if (as.next) tail.push(`   as:next <${as.next}>`)
+    if (as.items && as.items.length > 0) tail.push(`   as:items ${as.items.join(', ')}`)
+  }
+
+  if (tail.length === 0) {
+    lines.push(`<> a ${typeList} .`)
+  } else {
+    lines.push(`<> a ${typeList} ;`)
+    for (let i = 0; i < tail.length; i++) {
+      lines.push(`${tail[i]}${i === tail.length - 1 ? ' .' : ' ;'}`)
+    }
   }
   lines.push('')
   for (const entry of sorted) {

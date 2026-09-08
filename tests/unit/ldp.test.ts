@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { Parser } from 'n3'
-import { serializeContainer, formatContainerHtml, type ContainerEntry } from '../../src/ldp.js'
+import {
+  serializeContainer,
+  formatContainerHtml,
+  type AsCollectionOptions,
+  type ContainerEntry
+} from '../../src/ldp.js'
 
 describe('serializeContainer', () => {
   it('emits the LDP BasicContainer type for the container itself', () => {
@@ -188,5 +193,91 @@ describe('formatContainerHtml', () => {
       { name: 'a b.txt', path: 'foo/a b.txt', type: 'file', sha: 'sha-x' }
     ])
     expect(html).toMatch(/<a href="a%20b\.txt">a b\.txt<\/a>/)
+  })
+})
+
+describe('serializeContainer with ActivityStreams options', () => {
+  const sampleEntries: ContainerEntry[] = [
+    { name: 'a.ttl', path: 'foo/a.ttl', type: 'file', sha: 'sha-a' },
+    { name: 'b.ttl', path: 'foo/b.ttl', type: 'file', sha: 'sha-b' }
+  ]
+
+  it('leaves output unchanged when no `as` option is supplied', () => {
+    const turtle = serializeContainer('/foo/', sampleEntries)
+    expect(turtle).toContain('@prefix ldp: <http://www.w3.org/ns/ldp#> .')
+    expect(turtle).not.toContain('activitystreams')
+    expect(turtle).not.toContain('OrderedCollection')
+    expect(turtle).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*;/)
+  })
+
+  it('types the resource as as:OrderedCollection when kind is "ordered_collection"', () => {
+    const as: AsCollectionOptions = { kind: 'ordered_collection' }
+    const turtle = serializeContainer('/foo/', sampleEntries, as)
+    expect(turtle).toContain('as:OrderedCollection')
+    expect(turtle).not.toContain('as:OrderedCollectionPage')
+    expect(turtle).toMatch(
+      /<>\s+a\s+ldp:Container,\s+ldp:BasicContainer,\s+as:OrderedCollection/
+    )
+  })
+
+  it('types the resource as as:OrderedCollectionPage when kind is "ordered_collection_page"', () => {
+    const as: AsCollectionOptions = { kind: 'ordered_collection_page' }
+    const turtle = serializeContainer('/foo/', sampleEntries, as)
+    expect(turtle).toContain('as:OrderedCollectionPage')
+    expect(turtle).not.toMatch(/as:OrderedCollection\b/)
+    expect(turtle).toMatch(
+      /<>\s+a\s+ldp:Container,\s+ldp:BasicContainer,\s+as:OrderedCollectionPage/
+    )
+  })
+
+  it('emits partOf, first, last, prev, next with the supplied IRIs', () => {
+    const as: AsCollectionOptions = {
+      kind: 'ordered_collection_page',
+      partOf: 'https://example.test/changelog',
+      first: 'https://example.test/changelog?page=1',
+      last: 'https://example.test/changelog?page=9',
+      prev: 'https://example.test/changelog?page=2',
+      next: 'https://example.test/changelog?page=4'
+    }
+    const turtle = serializeContainer('/foo/', sampleEntries, as)
+    expect(turtle).toContain('as:partOf <https://example.test/changelog>')
+    expect(turtle).toContain('as:first <https://example.test/changelog?page=1>')
+    expect(turtle).toContain('as:last <https://example.test/changelog?page=9>')
+    expect(turtle).toContain('as:prev <https://example.test/changelog?page=2>')
+    expect(turtle).toContain('as:next <https://example.test/changelog?page=4>')
+  })
+
+  it('emits as:items with an abbreviated object list when items are supplied', () => {
+    const as: AsCollectionOptions = {
+      kind: 'ordered_collection_page',
+      items: ['<#a>', '<#b>']
+    }
+    const turtle = serializeContainer('/foo/', sampleEntries, as)
+    expect(turtle).toContain('as:items <#a>, <#b>')
+  })
+
+  it('emits both as:items and other AS predicates when both are supplied', () => {
+    const as: AsCollectionOptions = {
+      kind: 'ordered_collection_page',
+      partOf: 'https://example.test/changelog',
+      items: ['<#a>', '<#b>']
+    }
+    const turtle = serializeContainer('/foo/', sampleEntries, as)
+    expect(turtle).toContain('as:partOf <https://example.test/changelog>')
+    expect(turtle).toContain('as:items <#a>, <#b>')
+  })
+
+  it('emits as:items without any other AS predicates when only items are supplied', () => {
+    const as: AsCollectionOptions = {
+      kind: 'ordered_collection_page',
+      items: ['<#only>']
+    }
+    const turtle = serializeContainer('/foo/', sampleEntries, as)
+    expect(turtle).toContain('as:items <#only>')
+    expect(turtle).not.toContain('as:partOf')
+    expect(turtle).not.toContain('as:first')
+    expect(turtle).not.toContain('as:last')
+    expect(turtle).not.toContain('as:prev')
+    expect(turtle).not.toContain('as:next')
   })
 })
