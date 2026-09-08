@@ -57,17 +57,21 @@ vi.mock('../../src/github.js', async (importOriginal) => {
 const mockExtractCreateActivity = vi.fn()
 const mockAppendCurrentClientTriples = vi.fn()
 
-vi.mock('../../src/changelog.js', () => ({
-  ChangelogValidationError: class extends Error {
-    readonly status = 422
-    constructor(message: string) {
-      super(message)
-      this.name = 'ChangelogValidationError'
-    }
-  },
-  extractCreateActivity: mockExtractCreateActivity,
-  appendCurrentClientTriples: mockAppendCurrentClientTriples
-}))
+vi.mock('../../src/changelog.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/changelog.js')>()
+  return {
+    ...actual,
+    ChangelogValidationError: class extends Error {
+      readonly status = 422
+      constructor(message: string) {
+        super(message)
+        this.name = 'ChangelogValidationError'
+      }
+    },
+    extractCreateActivity: mockExtractCreateActivity,
+    appendCurrentClientTriples: mockAppendCurrentClientTriples
+  }
+})
 
 function makeContext(overrides: Partial<Context> = {}): Context {
   return {
@@ -3870,5 +3874,507 @@ describe('router changelog POST handler', () => {
     const committed = mockCommitFileOnBranch.mock.calls[0]![0]
     expect(committed.content).toBe(Buffer.from('sparql-prefix-stuff', 'utf-8').toString('base64'))
     expect(committed.message).toBe('Initial save')
+  })
+})
+
+describe('router changelog root GET', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('returns 200 with Content-Type text/turtle; charset=utf-8 when there are commits', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'commit',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+  })
+
+  it('returns 200 with an empty container when there are no commits', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/as:OrderedCollection\b/)
+    expect(body).not.toMatch(/ldp:contains/)
+  })
+
+  it('emits as:OrderedCollection type, year sub-containers as ldp:contains, as:first and as:last', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: '2024 commit',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      },
+      {
+        sha: 'def5678901234',
+        message: '2025 commit',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2025-06-22T10:00:00Z',
+        htmlUrl: 'https://example/commit/def5678901234'
+      }
+    ] as any)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/as:OrderedCollection\b/)
+    expect(body).toContain('<2024/>')
+    expect(body).toContain('<2025/>')
+    expect(body).toMatch(/as:first <[^>]*2024\/>/)
+    expect(body).toMatch(/as:last <[^>]*2025\/>/)
+  })
+
+  it('passes the page path to listCommitsForPath', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+    )
+
+    expect(mockListCommitsForPath).toHaveBeenCalledTimes(1)
+    const args = mockListCommitsForPath.mock.calls[0][0]
+    expect(args.path).toBe('foo')
+    expect(args.repo).toBe('octocat/hello-world')
+    expect(args.branch).toBe('HEAD')
+    expect(args.perPage).toBe(100)
+  })
+
+  it('groups commits by their UTC year across multiple years', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'a1',
+        message: 'Jan 2024',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-01-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/a1'
+      },
+      {
+        sha: 'b2',
+        message: 'Dec 2023',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2023-12-22T10:00:00Z',
+        htmlUrl: 'https://example/commit/b2'
+      },
+      {
+        sha: 'c3',
+        message: 'Jul 2024',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-07-04T10:00:00Z',
+        htmlUrl: 'https://example/commit/c3'
+      }
+    ] as any)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<2023/>')
+    expect(body).toContain('<2024/>')
+    expect(body).not.toContain('<2022/>')
+  })
+})
+
+describe('router changelog year GET', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  it('returns 200 with Content-Type text/turtle; charset=utf-8 on success', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'commit',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+  })
+
+  it('returns 404 when year is after currentYear', async () => {
+    const currentYear = new Date().getUTCFullYear()
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request(`http://localhost/foo/history/changelog/${currentYear + 100}`, {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: `changelog/${currentYear + 100}` } })
+    )
+
+    expect(res.status).toBe(404)
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+  })
+
+  it('emits as:OrderedCollectionPage type, as:partOf, and month-page ldp:contains entries', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Jan',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-01-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      },
+      {
+        sha: 'def5678901234',
+        message: 'Aug',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-08-22T10:00:00Z',
+        htmlUrl: 'https://example/commit/def5678901234'
+      }
+    ] as any)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('as:OrderedCollectionPage')
+    expect(body).toMatch(/as:partOf/)
+    expect(body).toContain('<01/>')
+    expect(body).toContain('<08/>')
+    expect(body).not.toContain('<02/>')
+    expect(body).toMatch(/as:items/)
+  })
+
+  it('passes the page path and year since/until to listCommitsForPath', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024', {
+      method: 'GET'
+    })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+    )
+
+    expect(mockListCommitsForPath).toHaveBeenCalledTimes(1)
+    const args = mockListCommitsForPath.mock.calls[0][0]
+    expect(args.path).toBe('foo')
+    expect(args.since).toBe('2024-01-01T00:00:00Z')
+    expect(args.until).toBe('2024-12-31T23:59:59Z')
+  })
+
+  it('returns 200 with an empty container when there are no commits in the year', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('as:OrderedCollectionPage')
+    expect(body).not.toMatch(/ldp:contains/)
+  })
+})
+
+describe('router changelog month GET', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  it('returns 200 with Content-Type text/turtle; charset=utf-8 on success', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+  })
+
+  it('returns 404 when year is after currentYear', async () => {
+    const currentYear = new Date().getUTCFullYear()
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request(`http://localhost/foo/history/changelog/${currentYear + 100}/03`, {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: `changelog/${currentYear + 100}/03` } })
+    )
+
+    expect(res.status).toBe(404)
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when month is out of range (e.g. 13)', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/13', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/13' } })
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('emits synthesized prov:endedAtTime, rdfs:label, and the OrderedCollectionPage envelope', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(/as:OrderedCollectionPage\b/)
+    expect(body).toMatch(/as:partOf/)
+    expect(body).toContain('prov:endedAtTime')
+    expect(body).toContain('2024-03-15T10:00:00Z')
+    expect(body).toContain('rdfs:label')
+    expect(body).toContain('Initial save')
+    expect(body).toMatch(/prov:Activity\b/)
+  })
+
+  it('merges client triples from the shard (subject <#current>) into the latest activity', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`<#current> <http://example.org/custom> "client data" .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('client data')
+    expect(body).toContain('abc1234')
+  })
+
+  it('treats a missing shard (404) as no client triples and still emits the envelope', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    const body = await res.text()
+    expect(body).toMatch(/as:OrderedCollectionPage\b/)
+  })
+
+  it('fetches the shard from the per-month path on the githubRef branch', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    const args = mockFetchFileFromGitHub.mock.calls[0][0]
+    expect(args.path).toBe('foo/.changelog/2024/03.ttl')
+    expect(args.ref).toBe('HEAD')
+  })
+
+  it('calls listCommitsForPath with since/until scoped to the month', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(mockListCommitsForPath).toHaveBeenCalledTimes(1)
+    const args = mockListCommitsForPath.mock.calls[0][0]
+    expect(args.path).toBe('foo')
+    expect(args.since).toBe('2024-03-01T00:00:00Z')
+    expect(args.until).toBe('2024-03-31T23:59:59Z')
+    expect(args.perPage).toBe(100)
   })
 })

@@ -18,7 +18,11 @@ import {
   PatchValidationError,
   PatchConflictError,
 } from "../../../src/patch.js";
-import { serializeContainer, formatContainerHtml } from "../../../src/ldp.js";
+import {
+  serializeContainer,
+  formatContainerHtml,
+  type AsCollectionOptions,
+} from "../../../src/ldp.js";
 import { parseHistoryPath, type HistoryPath } from "../../../src/history.js";
 import {
   listCommitsForPath,
@@ -29,7 +33,10 @@ import {
   ChangelogValidationError,
   extractCreateActivity,
   appendCurrentClientTriples,
+  synthesizeActivityTriples,
 } from "../../../src/changelog.js";
+import { Parser, Writer, DataFactory } from "n3";
+import type { Quad } from "@rdfjs/types";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -195,6 +202,29 @@ async function handleHistoryGet(
     );
   }
 
+  if (parsed.kind === "changelog_root") {
+    return await handleChangelogRootGet(req, page, corsHeaders);
+  }
+
+  if (parsed.kind === "changelog_year") {
+    return await handleChangelogYearGet(
+      req,
+      page,
+      parsed.year,
+      corsHeaders,
+    );
+  }
+
+  if (parsed.kind === "changelog_month") {
+    return await handleChangelogMonthGet(
+      req,
+      page,
+      parsed.year,
+      parsed.month,
+      corsHeaders,
+    );
+  }
+
   return notFound(corsHeaders);
 }
 
@@ -333,6 +363,13 @@ function monthFromIso(iso: string): number | null {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
   return d.getUTCMonth() + 1;
+}
+
+function yearFromIso(iso: string): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.getUTCFullYear();
 }
 
 function lastDayOfMonth(year: number, month: number): number {
@@ -743,6 +780,292 @@ async function handlePatch(
       headers: corsHeaders,
     });
   }
+}
+
+async function handleChangelogRootGet(
+  req: Request,
+  page: string,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  const { githubRef } = loadGithubConfig();
+  const commits = await listCommitsForPath({
+    repo: pageRepo(page),
+    token: githubToken(),
+    branch: githubRef,
+    path: page,
+    perPage: 100
+  });
+
+  const yearsWithCommits = new Set<number>();
+  for (const commit of commits) {
+    const y = yearFromIso(commit.date);
+    if (y !== null) yearsWithCommits.add(y);
+  }
+
+  const sortedYears = [...yearsWithCommits].sort((a, b) => a - b);
+  const entries = sortedYears.map((y) => ({
+    name: String(y),
+    path: `${page}/history/changelog/${y}`,
+    type: "dir" as const,
+    sha: ""
+  }));
+
+  const containerUri = `/${page}/history/changelog/`;
+  const as: AsCollectionOptions = { kind: "ordered_collection" };
+  if (sortedYears.length > 0) {
+    as.first = `${containerUri}${sortedYears[0]}/`;
+    as.last = `${containerUri}${sortedYears[sortedYears.length - 1]}/`;
+  }
+
+  const body = serializeContainer(containerUri, entries, as);
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/turtle; charset=utf-8",
+      "Cache-Control":
+        "public, max-age=86400, stale-while-revalidate=259200"
+    }
+  });
+}
+
+async function handleChangelogYearGet(
+  req: Request,
+  page: string,
+  year: number,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  if (!isInRange(year)) {
+    return notFound(corsHeaders);
+  }
+  const { githubRef } = loadGithubConfig();
+  const commits = await listCommitsForPath({
+    repo: pageRepo(page),
+    token: githubToken(),
+    branch: githubRef,
+    path: page,
+    since: `${year}-01-01T00:00:00Z`,
+    until: `${year}-12-31T23:59:59Z`,
+    perPage: 100
+  });
+
+  const monthsWithCommits = new Set<number>();
+  for (const commit of commits) {
+    const m = monthFromIso(commit.date);
+    if (m !== null) monthsWithCommits.add(m);
+  }
+
+  const sortedMonths = [...monthsWithCommits].sort((a, b) => a - b);
+  const entries = sortedMonths.map((m) => ({
+    name: String(m).padStart(2, "0"),
+    path: `${page}/history/changelog/${year}/${String(m).padStart(2, "0")}`,
+    type: "dir" as const,
+    sha: ""
+  }));
+
+  const containerUri = `/${page}/history/changelog/${year}/`;
+  const rootUri = `/${page}/history/changelog/`;
+  const currentYear = new Date().getUTCFullYear();
+  const prevYear = year - 1;
+  const nextYear = year + 1;
+
+  const as: AsCollectionOptions = {
+    kind: "ordered_collection_page",
+    partOf: rootUri
+  };
+  if (prevYear >= REPO_START_YEAR) {
+    as.prev = `/${page}/history/changelog/${prevYear}/`;
+  }
+  if (nextYear <= currentYear) {
+    as.next = `/${page}/history/changelog/${nextYear}/`;
+  }
+  if (sortedMonths.length > 0) {
+    as.items = sortedMonths.map((m) => `<${String(m).padStart(2, "0")}/>`);
+  }
+
+  const body = serializeContainer(containerUri, entries, as);
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/turtle; charset=utf-8",
+      "Cache-Control":
+        "public, max-age=86400, stale-while-revalidate=259200"
+    }
+  });
+}
+
+const SHARD_BASE_IRI = "http://localhost/";
+const AS_NS = "https://www.w3.org/ns/activitystreams#";
+const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+async function handleChangelogMonthGet(
+  req: Request,
+  page: string,
+  year: number,
+  month: number,
+  corsHeaders: Record<string, string>,
+): Promise<Response> {
+  const currentYear = new Date().getUTCFullYear();
+  if (year < REPO_START_YEAR || year > currentYear || month < 1 || month > 12) {
+    return notFound(corsHeaders);
+  }
+
+  const monthPadded = String(month).padStart(2, "0");
+  const lastDay = lastDayOfMonth(year, month);
+  const { githubRepo, githubToken: token, githubRef } = loadGithubConfig();
+  const shardPath = `${page}/.changelog/${year}/${monthPadded}.ttl`;
+
+  let shardText = "";
+  try {
+    const cur = await fetchFileFromGitHub({
+      repo: githubRepo,
+      token,
+      ref: githubRef,
+      path: shardPath
+    });
+    if (cur.status === 200) {
+      shardText = new TextDecoder().decode(cur.body);
+    } else if (cur.status !== 404) {
+      return new Response(`Upstream returned ${cur.status}`, {
+        status: cur.status,
+        headers: corsHeaders
+      });
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    return new Response(message, {
+      status: 502,
+      headers: corsHeaders
+    });
+  }
+
+  const commits = await listCommitsForPath({
+    repo: githubRepo,
+    token,
+    branch: githubRef,
+    path: page,
+    since: `${year}-${monthPadded}-01T00:00:00Z`,
+    until: `${year}-${monthPadded}-${String(lastDay).padStart(2, "0")}T23:59:59Z`,
+    perPage: 100
+  });
+
+  const sortedCommits = [...commits].sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
+
+  const origin = new URL(req.url).origin;
+  const pageUrl = `${origin}/${page}`;
+
+  let shardQuads: Quad[] = [];
+  if (shardText.trim() !== "") {
+    try {
+      const parser = new Parser({
+        format: "text/turtle",
+        baseIRI: SHARD_BASE_IRI
+      });
+      shardQuads = parser.parse(shardText);
+    } catch {
+      shardQuads = [];
+    }
+
+    if (sortedCommits.length > 0) {
+      const latestShortSha =
+        sortedCommits[sortedCommits.length - 1]!.sha.slice(0, 7);
+      const currentSubject = DataFactory.namedNode(
+        `${SHARD_BASE_IRI}#current`
+      );
+      const resolvedSubject = DataFactory.namedNode(
+        `${pageUrl}#${latestShortSha}`
+      );
+      shardQuads = shardQuads.map((q) =>
+        q.subject.equals(currentSubject)
+          ? DataFactory.quad(resolvedSubject, q.predicate, q.object, q.graph)
+          : q
+      );
+    }
+  }
+
+  const allQuads: Quad[] = [];
+  for (let i = 0; i < sortedCommits.length; i++) {
+    const commit = sortedCommits[i]!;
+    const prevShortSha =
+      i > 0 ? sortedCommits[i - 1]!.sha.slice(0, 7) : null;
+    const synth = synthesizeActivityTriples({
+      commit,
+      pageUrl,
+      prevShortSha
+    });
+    const activitySubject = DataFactory.namedNode(synth.subject);
+
+    allQuads.push(...synth.quads);
+
+    for (const q of shardQuads) {
+      if (q.subject.equals(activitySubject)) {
+        allQuads.push(q);
+      }
+    }
+  }
+
+  const containerUri = `/${page}/history/changelog/${year}/${monthPadded}/`;
+  const monthSubject = DataFactory.namedNode(`${origin}${containerUri}`);
+  const defaultGraph = DataFactory.defaultGraph();
+  const rootIri = `${origin}/${page}/history/changelog/`;
+
+  allQuads.push(
+    DataFactory.quad(
+      monthSubject,
+      DataFactory.namedNode(RDF_TYPE),
+      DataFactory.namedNode(`${AS_NS}OrderedCollectionPage`),
+      defaultGraph
+    ),
+    DataFactory.quad(
+      monthSubject,
+      DataFactory.namedNode(`${AS_NS}partOf`),
+      DataFactory.namedNode(rootIri),
+      defaultGraph
+    )
+  );
+
+  for (const commit of sortedCommits) {
+    allQuads.push(
+      DataFactory.quad(
+        monthSubject,
+        DataFactory.namedNode(`${AS_NS}items`),
+        DataFactory.namedNode(`${pageUrl}#${commit.sha.slice(0, 7)}`),
+        defaultGraph
+      )
+    );
+  }
+
+  const writer = new Writer({
+    format: "text/turtle",
+    prefixes: {
+      as: AS_NS,
+      prov: "http://www.w3.org/ns/prov#",
+      rdfs: "http://www.w3.org/2000/01/rdf-schema#",
+      xsd: "http://www.w3.org/2001/XMLSchema#",
+      rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    }
+  });
+  writer.addQuads(allQuads);
+
+  const body = await new Promise<string>((resolve, reject) => {
+    writer.end((err, result) => (err ? reject(err) : resolve(result)));
+  });
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/turtle; charset=utf-8",
+      "Cache-Control":
+        "public, max-age=86400, stale-while-revalidate=259200"
+    }
+  });
 }
 
 async function handleChangelogMonthPatch(
