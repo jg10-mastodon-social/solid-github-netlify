@@ -227,12 +227,16 @@ describe('parseHistoryPath', () => {
       })
     })
 
-    it('parses "changelog/2024/03/" (trailing slash) as changelog_month', () => {
-      expect(parseHistoryPath('changelog/2024/03/')).toEqual({
-        kind: 'changelog_month',
-        year: 2024,
-        month: 3
-      })
+    it('rejects "changelog/2024/03.ttl" (.ttl is not part of the changelog month IRI)', () => {
+      expect(parseHistoryPath('changelog/2024/03.ttl')).toBeNull()
+    })
+
+    it('rejects "changelog/2024/03/" (trailing slash: month is a resource, not a container)', () => {
+      expect(parseHistoryPath('changelog/2024/03/')).toBeNull()
+    })
+
+    it('rejects "changelog/2024/03.ttl/" (.ttl and trailing slash)', () => {
+      expect(parseHistoryPath('changelog/2024/03.ttl/')).toBeNull()
     })
 
     it('rejects "changelog/abc" (non-numeric year)', () => {

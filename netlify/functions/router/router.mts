@@ -874,7 +874,7 @@ async function handleChangelogYearGet(
   const entries = sortedMonths.map((m) => ({
     name: String(m).padStart(2, "0"),
     path: `${page}/history/changelog/${year}/${String(m).padStart(2, "0")}`,
-    type: "dir" as const,
+    type: "file" as const,
     sha: ""
   }));
 
@@ -895,7 +895,7 @@ async function handleChangelogYearGet(
     as.next = `/${page}/history/changelog/${nextYear}/`;
   }
   if (sortedMonths.length > 0) {
-    as.items = sortedMonths.map((m) => `<${String(m).padStart(2, "0")}/>`);
+    as.items = sortedMonths.map((m) => `<${String(m).padStart(2, "0")}>`);
   }
 
   const body = serializeContainer(containerUri, entries, as);
@@ -973,6 +973,7 @@ async function handleChangelogMonthGet(
 
   const origin = new URL(req.url).origin;
   const pageUrl = `${origin}/${page}`;
+  const monthUrl = `${origin}/${page}/history/changelog/${year}/${monthPadded}`;
 
   let shardQuads: Quad[] = [];
   if (shardText.trim() !== "") {
@@ -993,7 +994,7 @@ async function handleChangelogMonthGet(
         `${SHARD_BASE_IRI}#current`
       );
       const resolvedSubject = DataFactory.namedNode(
-        `${pageUrl}#${latestShortSha}`
+        `${monthUrl}#${latestShortSha}`
       );
       shardQuads = shardQuads.map((q) =>
         q.subject.equals(currentSubject)
@@ -1010,6 +1011,7 @@ async function handleChangelogMonthGet(
       i > 0 ? sortedCommits[i - 1]!.sha.slice(0, 7) : null;
     const synth = synthesizeActivityTriples({
       commit,
+      monthUrl,
       pageUrl,
       prevShortSha
     });
@@ -1024,8 +1026,7 @@ async function handleChangelogMonthGet(
     }
   }
 
-  const containerUri = `/${page}/history/changelog/${year}/${monthPadded}/`;
-  const monthSubject = DataFactory.namedNode(`${origin}${containerUri}`);
+  const monthSubject = DataFactory.namedNode(monthUrl);
   const defaultGraph = DataFactory.defaultGraph();
   const rootIri = `${origin}/${page}/history/changelog/`;
 
@@ -1049,7 +1050,7 @@ async function handleChangelogMonthGet(
       DataFactory.quad(
         monthSubject,
         DataFactory.namedNode(`${AS_NS}items`),
-        DataFactory.namedNode(`${pageUrl}#${commit.sha.slice(0, 7)}`),
+        DataFactory.namedNode(`${monthUrl}#${commit.sha.slice(0, 7)}`),
         defaultGraph
       )
     );
@@ -1057,6 +1058,7 @@ async function handleChangelogMonthGet(
 
   const writer = new Writer({
     format: "text/turtle",
+    baseIRI: monthUrl,
     prefixes: {
       as: AS_NS,
       prov: "http://www.w3.org/ns/prov#",
@@ -1089,10 +1091,12 @@ async function handleChangelogMonthPatch(
   pathname: string,
 ): Promise<Response> {
   const rest = context.params.rest ?? "";
-  const restWithoutTtl = rest.replace(/\.ttl$/i, "");
-  const parsed = parseHistoryPath(restWithoutTtl);
+  const parsed = parseHistoryPath(rest);
 
-  if (parsed?.kind !== "changelog_month") {
+  if (parsed === null) {
+    return notFound(corsHeaders);
+  }
+  if (parsed.kind !== "changelog_month") {
     return new Response("Method Not Allowed", {
       status: 405,
       headers: corsHeaders,
@@ -1129,13 +1133,6 @@ async function handleChangelogMonthPatch(
   if (!isPathSafe(path)) {
     return new Response("Unsafe path", {
       status: 400,
-      headers: corsHeaders,
-    });
-  }
-
-  if (!rest.toLowerCase().endsWith(".ttl")) {
-    return new Response("PATCH requires .ttl extension", {
-      status: 422,
       headers: corsHeaders,
     });
   }

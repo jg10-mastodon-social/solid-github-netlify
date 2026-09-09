@@ -111,10 +111,9 @@ function parseSingleSegment(seg: string): HistoryPath | null {
 }
 
 function parseChangelogSegments(segments: string[]): HistoryPath | null {
-  const trimmed =
+  const hadTrailingSlash =
     segments.length > 1 && segments[segments.length - 1] === ''
-      ? segments.slice(0, -1)
-      : segments
+  const trimmed = hadTrailingSlash ? segments.slice(0, -1) : segments
 
   for (const seg of trimmed) {
     if (UNSAFE_SEGMENTS.has(seg)) return null
@@ -135,6 +134,11 @@ function parseChangelogSegments(segments: string[]): HistoryPath | null {
   }
 
   const monthSeg = trimmed[2]!
+  // Reject .ttl suffix — the changelog month URL has no extension.
+  // The on-disk file extension (.ttl) is authoritative; the URL stays bare.
+  if (monthSeg.toLowerCase().endsWith('.ttl')) {
+    return null
+  }
   if (!MONTH_RE.test(monthSeg)) {
     return null
   }
@@ -144,6 +148,8 @@ function parseChangelogSegments(segments: string[]): HistoryPath | null {
   }
 
   if (trimmed.length === 3) {
+    // Reject trailing-slash form: month is a resource, not a container.
+    if (hadTrailingSlash) return null
     return { kind: 'changelog_month', year, month }
   }
 

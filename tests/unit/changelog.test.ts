@@ -275,11 +275,12 @@ describe('synthesizeActivityTriples', () => {
     }
     const result = synthesizeActivityTriples({
       commit,
+      monthUrl: 'https://example.com/foo/history/changelog/2024/03',
       pageUrl: 'https://example.com/foo',
       prevShortSha: 'def5678',
     })
 
-    expect(result.subject).toBe('https://example.com/foo#abc1234')
+    expect(result.subject).toBe('https://example.com/foo/history/changelog/2024/03#abc1234')
     expect(result.quads).toHaveLength(5)
 
     const typeQ = findQuad(result.quads, 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type')
@@ -327,11 +328,12 @@ describe('synthesizeActivityTriples', () => {
     }
     const result = synthesizeActivityTriples({
       commit,
+      monthUrl: 'https://example.com/foo/history/changelog/2024/03',
       pageUrl: 'https://example.com/foo',
       prevShortSha: null,
     })
 
-    expect(result.subject).toBe('https://example.com/foo#abc1234')
+    expect(result.subject).toBe('https://example.com/foo/history/changelog/2024/03#abc1234')
     expect(result.quads).toHaveLength(4)
     expect(findQuad(result.quads, PROV_USED)).toBeUndefined()
   })
@@ -347,15 +349,16 @@ describe('synthesizeActivityTriples', () => {
     }
     const result = synthesizeActivityTriples({
       commit,
+      monthUrl: 'https://example.com/foo/history/changelog/2024/03',
       pageUrl: 'https://example.com/foo',
       prevShortSha: null,
     })
 
-    expect(result.subject).toBe('https://example.com/foo#abcdefg')
+    expect(result.subject).toBe('https://example.com/foo/history/changelog/2024/03#abcdefg')
     expect(result.subject.endsWith('#abcdefg')).toBe(true)
   })
 
-  it('uses the provided pageUrl in the subject', () => {
+  it('uses the provided monthUrl as the activity subject (local fragment of the month)', () => {
     const commit: Commit = {
       sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
       message: 'msg',
@@ -366,15 +369,16 @@ describe('synthesizeActivityTriples', () => {
     }
     const result = synthesizeActivityTriples({
       commit,
+      monthUrl: 'https://other.org/bar/history/changelog/2025/06',
       pageUrl: 'https://other.org/bar',
       prevShortSha: null,
     })
 
-    expect(result.subject.startsWith('https://other.org/bar#')).toBe(true)
-    expect(result.subject).toBe('https://other.org/bar#abc1234')
+    expect(result.subject.startsWith('https://other.org/bar/history/changelog/2025/06#')).toBe(true)
+    expect(result.subject).toBe('https://other.org/bar/history/changelog/2025/06#abc1234')
   })
 
-  it('prov:generated equals the activity subject', () => {
+  it('prov:generated still points at the page-state fragment, not the month fragment', () => {
     const commit: Commit = {
       sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
       message: 'msg',
@@ -385,13 +389,36 @@ describe('synthesizeActivityTriples', () => {
     }
     const result = synthesizeActivityTriples({
       commit,
+      monthUrl: 'https://example.com/foo/history/changelog/2024/03',
       pageUrl: 'https://example.com/foo',
-      prevShortSha: 'def5678',
+      prevShortSha: null,
     })
 
     const generatedQ = findQuad(result.quads, PROV_GENERATED)
     expect(generatedQ).toBeDefined()
     expect(generatedQ!.object.termType).toBe('NamedNode')
-    expect(generatedQ!.object.value).toBe(result.subject)
+    expect(generatedQ!.object.value).toBe('https://example.com/foo#abc1234')
+  })
+
+  it('prov:used still points at the page-state fragment of the predecessor', () => {
+    const commit: Commit = {
+      sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
+      message: 'msg',
+      date: '2024-01-01T00:00:00Z',
+      authorName: 'Alice',
+      authorEmail: 'alice@example.com',
+      htmlUrl: 'https://github.com/foo/bar/commit/abc1234',
+    }
+    const result = synthesizeActivityTriples({
+      commit,
+      monthUrl: 'https://example.com/foo/history/changelog/2024/03',
+      pageUrl: 'https://example.com/foo',
+      prevShortSha: 'def5678',
+    })
+
+    const usedQ = findQuad(result.quads, PROV_USED)
+    expect(usedQ).toBeDefined()
+    expect(usedQ!.object.termType).toBe('NamedNode')
+    expect(usedQ!.object.value).toBe('https://example.com/foo#def5678')
   })
 })

@@ -230,18 +230,20 @@ Solid-OIDC-authenticated publish trigger for the changelog. Each POST produces e
 
 Solid-OIDC-authenticated buffer for past-month changelog edits. Edits the per-month shard file at `<page>/.changelog/<year>/<month>.ttl` on `${page}-draft` (not main) — the edit sits in the draft branch until the next POST drains it via the squash merge.
 
-Same patch constraints as the draft PATCH: ground triples only, no `solid:where`, no blank nodes, no variables. The router validates the path is a month bucket (not root, not year), the file ends in `.ttl`, and the Content-Type is `text/n3`.
+The month URL has no extension; the on-disk file extension (`.ttl`) is authoritative and derived from the parsed month. `.ttl` and trailing-slash variants of the URL return 404. Same patch constraints as the draft PATCH: ground triples only, no `solid:where`, no blank nodes, no variables. The router validates the path is a month bucket (not root, not year) and the Content-Type is `text/n3`.
 
 ### Changelog GETs
 
 GETs read `GITHUB_REF` only (no draft fallback) and synthesize an LDP + ActivityStreams view of the page's commit history. The shard file holds only the client payload — `rdfs:label` and the server-managed triples (`rdf:type`, `prov:generated`, `prov:used`, `prov:endedAtTime`) are all synthesized from commit metadata at read time.
 
+The changelog month is content-type-negotiable: today only Turtle is emitted, but the URL has no extension so future serializers (JSON-LD, NTriples, HTML) slot in via Accept-header negotiation without changing IRIs.
+
 1. Load `GITHUB_REPO`/`GITHUB_TOKEN`/`GITHUB_REF`.
-2. **Root** `/<page>/history/changelog/` — return the synthesized `as:OrderedCollection` with year sub-containers. `as:first`/`as:last` point to the first/last year pages; no `as:items` (items live in month pages). 301 redirect from the no-slash form.
-3. **Year** `/<page>/history/changelog/YYYY/` — return the synthesized `as:OrderedCollectionPage` for that year. `as:partOf` the root; `as:prev`/`as:next` to sibling years; `as:items` lists month-page URIs. 301 redirect from the no-slash form.
-4. **Month** `/<page>/history/changelog/YYYY/MM` — fetch the per-month shard at `<page>/.changelog/<year>/<month>.ttl` from `GITHUB_REF`. Enumerate commits via `listCommitsForPath` (filtered by date range) to get the SHAs, dates, and commit messages. For each commit in chronological order:
-   - Look up the activity's client payload in the shard (subject is `<#<shortSha>>`, except the most recent which is `<#current>` and is resolved to `<#<latestShortSha>>`). Activities with no client payload simply have no triples in the file.
-   - Add synthesized server-managed triples. For example:
+2. **Root** `/<page>/history/changelog/` — return the synthesized `as:OrderedCollection` with year sub-containers. `as:first`/`as:last` point to the first/last year pages; no `as:items` (items live in year pages). 301 redirect from the no-slash form.
+3. **Year** `/<page>/history/changelog/YYYY/` — return the synthesized `as:OrderedCollectionPage` for that year. `as:partOf` the root; `as:prev`/`as:next` to sibling years; `as:items` lists month-page URIs (bare, no `.ttl`). Month children are typed `ldp:Resource` (not `ldp:Container`). 301 redirect from the no-slash form.
+4. **Month** `/<page>/history/changelog/YYYY/MM` — the canonical month resource URL. The shard file is fetched from `<page>/.changelog/<year>/<month>.ttl` on `GITHUB_REF`. Enumerate commits via `listCommitsForPath` (filtered by date range) to get the SHAs, dates, and commit messages. For each commit in chronological order:
+   - Look up the activity's client payload in the shard (subject is `<#current>`, which is resolved to `<#<latestShortSha>>` at read time — but other prior commits in the shard keep their `<#<shortSha>>` subject). Activities with no client payload simply have no triples in the file.
+   - Add synthesized server-managed triples. Each commit is a local fragment of the month resource (`<#abc1234>`, not a fragment of the page URL). For example:
 
      ```turtle
      <#abc1234>
@@ -254,8 +256,9 @@ GETs read `GITHUB_REF` only (no draft fallback) and synthesize an LDP + Activity
      ```
 
      `prov:used` is omitted for the very first commit ever. `rdfs:label` is the commit message (the file holds only the client payload — `ex:custom "foo"` in this example).
-5. Wrap with the LDP + AS envelope (`a ldp:Resource, as:OrderedCollectionPage`, `as:partOf`, `as:prev`/`as:next`, inline `as:items`).
-6. Years/months outside `[REPO_START_YEAR, currentYear]` return 404.
+5. Wrap with the LDP + AS envelope (`a as:OrderedCollectionPage`, `as:partOf`, inline `as:items`). The document is serialized with `baseIRI = <monthUrl>` so commit fragments serialize as `<#<shortSha>>`.
+6. The `.ttl` URL form (`/YYYY/MM.ttl`) and the trailing-slash form (`/YYYY/MM/`) both return 404 — the month is a resource, not a container, and the on-disk file extension is authoritative.
+7. Years/months outside `[REPO_START_YEAR, currentYear]` return 404.
 
 **Drift policy:** main commits are the canonical source for server-managed triples. Force-push to `GITHUB_REF` and history rewrites are not supported; if they happen, GET will reflect the new commit state.
 

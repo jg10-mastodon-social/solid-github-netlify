@@ -1860,46 +1860,6 @@ describe('router changelog month PATCH handler', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'text/n3',
-        authorization: 'DPoP token',
-        dpop: 'dpop'
-      },
-      body: patchBody('ex:alice ex:p ex:bob .')
-    })
-    const res = await handler(
-      req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
-    )
-
-    expect(res.status).toBe(401)
-    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
-  })
-
-  it('returns 415 when Content-Type is not text/n3', async () => {
-    const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/sparql-update',
-        authorization: 'DPoP token',
-        dpop: 'dpop'
-      },
-      body: patchBody('ex:alice ex:p ex:bob .')
-    })
-    const res = await handler(
-      req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
-    )
-
-    expect(res.status).toBe(415)
-    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
-  })
-
-  it('returns 422 when the URL does not end in .ttl', async () => {
-    const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/history/changelog/2024/03', {
       method: 'PATCH',
       headers: {
@@ -1914,7 +1874,69 @@ describe('router changelog month PATCH handler', () => {
       makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
     )
 
-    expect(res.status).toBe(422)
+    expect(res.status).toBe(401)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the month URL ends in .ttl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(404)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the month URL has a trailing slash', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03/', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03/' } })
+    )
+
+    expect(res.status).toBe(404)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('returns 415 when Content-Type is not text/n3', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/sparql-update',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:p ex:bob .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(415)
     expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 
@@ -1934,7 +1956,7 @@ describe('router changelog month PATCH handler', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'text/n3',
@@ -1945,7 +1967,7 @@ describe('router changelog month PATCH handler', () => {
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
     )
 
     expect(res.status).toBe(200)
@@ -1982,7 +2004,7 @@ describe('router changelog month PATCH handler', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'text/n3',
@@ -1993,7 +2015,7 @@ describe('router changelog month PATCH handler', () => {
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
     )
 
     expect(res.status).toBe(200)
@@ -2017,7 +2039,7 @@ describe('router changelog month PATCH handler', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'text/n3',
@@ -2028,7 +2050,7 @@ describe('router changelog month PATCH handler', () => {
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
     )
 
     expect(res.status).toBe(422)
@@ -2045,7 +2067,7 @@ describe('router changelog month PATCH handler', () => {
     })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'text/n3',
@@ -2058,7 +2080,7 @@ describe('router changelog month PATCH handler', () => {
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
     )
 
     expect(res.status).toBe(409)
@@ -2069,7 +2091,7 @@ describe('router changelog month PATCH handler', () => {
     mockIsPathSafe.mockReturnValueOnce(false)
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo%2F..%2Fbar/history/changelog/2024/03.ttl', {
+    const req = new Request('http://localhost/foo%2F..%2Fbar/history/changelog/2024/03', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'text/n3',
@@ -2080,7 +2102,7 @@ describe('router changelog month PATCH handler', () => {
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo/../bar', rest: 'changelog/2024/03.ttl' } })
+      makeContext({ params: { page: 'foo/../bar', rest: 'changelog/2024/03' } })
     )
 
     expect(res.status).toBe(400)
@@ -4162,10 +4184,13 @@ describe('router changelog year GET', () => {
     const body = await res.text()
     expect(body).toContain('as:OrderedCollectionPage')
     expect(body).toMatch(/as:partOf/)
-    expect(body).toContain('<01/>')
-    expect(body).toContain('<08/>')
+    // Months are advertised as ldp:Resource at bare URIs (no .ttl, no trailing slash)
+    expect(body).toMatch(/<01>\s+a\s+ldp:Resource\s*\./)
+    expect(body).toMatch(/<08>\s+a\s+ldp:Resource\s*\./)
     expect(body).not.toContain('<02/>')
-    expect(body).toMatch(/as:items/)
+    expect(body).not.toContain('<02> a ldp:Resource')
+    expect(body).not.toContain('<01.ttl>')
+    expect(body).toMatch(/as:items\s+<01>,\s*<08>/)
   })
 
   it('passes the page path and year since/until to listCommitsForPath', async () => {
@@ -4424,5 +4449,73 @@ describe('router changelog month GET', () => {
     expect(args.since).toBe('2024-03-01T00:00:00Z')
     expect(args.until).toBe('2024-03-31T23:59:59Z')
     expect(args.perPage).toBe(100)
+  })
+
+  it('returns 404 when the month URL ends in .ttl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03.ttl', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03.ttl' } })
+    )
+
+    expect(res.status).toBe(404)
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the month URL has a trailing slash', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03/', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03/' } })
+    )
+
+    expect(res.status).toBe(404)
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+  })
+
+  it('addresses each commit activity as a local fragment of the month IRI (not the page IRI)', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    // Activity subject is a local fragment of the month resource (relative IRI in serialization)
+    expect(body).toContain('<#abc1234>')
+    // as:items references the month-local fragment
+    expect(body).toMatch(/as:items\s+<#abc1234>/)
+    // Activity must NOT be addressed as a fragment of the page (/foo)
+    expect(body).not.toContain('<http://localhost/foo#abc1234>')
   })
 })

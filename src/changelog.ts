@@ -183,14 +183,18 @@ export async function appendCurrentClientTriples(
 export interface SynthesizeOptions {
   /** The commit that produced this activity. */
   commit: Commit
-  /** The public URL of the page, e.g. 'https://example.com/foo'. No trailing slash. */
+  /** The canonical IRI of the changelog month resource, e.g.
+   * 'https://example.com/foo/history/changelog/2024/03'. No trailing slash. */
+  monthUrl: string
+  /** The public URL of the page, e.g. 'https://example.com/foo'. No trailing slash.
+   * Used for `prov:generated` / `prov:used` (page-state relationships). */
   pageUrl: string
   /** The short SHA of the predecessor commit, or null if this is the first commit ever. */
   prevShortSha: string | null
 }
 
 export interface SynthesizeResult {
-  /** The IRI of the activity, `<pageUrl>#<shortSha>`. */
+  /** The IRI of the activity, a local fragment of the month resource: `<monthUrl>#<shortSha>`. */
   subject: string
   /** The synthesized server-managed triples. */
   quads: Quad[]
@@ -198,13 +202,17 @@ export interface SynthesizeResult {
 
 /**
  * Synthesizes the server-managed triples for one activity from commit
- * metadata. The activity's subject is `<pageUrl>#<shortSha>`. The
- * synthesized triples are:
+ * metadata. The activity's subject is `<monthUrl>#<shortSha>` (a local
+ * fragment of the changelog month resource, not the page URL).
+ * The synthesized triples are:
  *   - rdf:type prov:Activity
  *   - prov:generated <pageUrl>#<shortSha>
  *   - prov:used <pageUrl>#<prevShortSha>  (omitted when prevShortSha is null)
  *   - prov:endedAtTime "<commit.date>"^^xsd:dateTime
  *   - rdfs:label "<commit.message>"
+ *
+ * `prov:generated` / `prov:used` describe the page-state relationship
+ * (the entity the activity produced / consumed), so they keep `pageUrl`.
  *
  * The `shortSha` is derived by slicing `commit.sha` to its first 7
  * characters (matching the existing history-route convention).
@@ -212,9 +220,9 @@ export interface SynthesizeResult {
 export function synthesizeActivityTriples(
   options: SynthesizeOptions,
 ): SynthesizeResult {
-  const { commit, pageUrl, prevShortSha } = options
+  const { commit, monthUrl, pageUrl, prevShortSha } = options
   const shortSha = commit.sha.slice(0, 7)
-  const subject = `${pageUrl}#${shortSha}`
+  const subject = `${monthUrl}#${shortSha}`
   const subjectNode = DataFactory.namedNode(subject)
 
   const quads: Quad[] = [
@@ -226,7 +234,7 @@ export function synthesizeActivityTriples(
     DataFactory.quad(
       subjectNode,
       DataFactory.namedNode(PROV_GENERATED),
-      DataFactory.namedNode(subject),
+      DataFactory.namedNode(`${pageUrl}#${shortSha}`),
     ),
   ]
 
