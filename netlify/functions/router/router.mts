@@ -1573,6 +1573,7 @@ async function handleGet(
       draft,
       authResult,
       writeWebIds,
+      isPageRoot: !draft && path !== "",
     });
   }
 
@@ -1604,6 +1605,7 @@ interface ContainerGetContext {
   draft: boolean;
   authResult: AuthResponse | undefined;
   writeWebIds: string[];
+  isPageRoot: boolean;
 }
 
 async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
@@ -1633,7 +1635,23 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
       return new Response("Not Found", { status: 404, headers });
     }
 
-    const turtle = serializeContainer(ctx.containerUri, result.entries);
+    let extras: Extras | undefined;
+    if (ctx.isPageRoot) {
+      extras = await buildPageRootExtras({
+        req: ctx.req,
+        path: ctx.path,
+        githubRepo: ctx.githubRepo,
+        githubToken: ctx.githubToken,
+        githubRef: ctx.githubRef,
+      });
+    }
+
+    const turtle = serializeContainer(
+      ctx.containerUri,
+      result.entries,
+      undefined,
+      extras
+    );
     const headers: Record<string, string> = {
       ...ctx.corsHeaders,
       "Content-Type": "text/turtle; charset=utf-8",
@@ -1657,6 +1675,43 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
       headers: ctx.corsHeaders,
     });
   }
+}
+
+async function buildPageRootExtras(options: {
+  req: Request;
+  path: string;
+  githubRepo: string;
+  githubToken: string;
+  githubRef: string;
+}): Promise<Extras | undefined> {
+  const commits = await listCommitsForPath({
+    repo: options.githubRepo,
+    token: options.githubToken,
+    branch: options.githubRef,
+    path: options.path,
+    perPage: 1,
+  }).catch(() => []);
+
+  const latest = commits[0];
+  if (!latest || !latest.date) return undefined;
+
+  const d = new Date(latest.date);
+  if (isNaN(d.getTime())) return undefined;
+
+  const shortSha = latest.sha.slice(0, 7);
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const origin = new URL(options.req.url).origin;
+  const pageUrl = `${origin}/${options.path}`;
+
+  return {
+    "http://mementoweb.org/ns#memento":
+      `${pageUrl}/history/${shortSha}/`,
+    "http://www.w3.org/2002/07/owl#sameAs":
+      `${pageUrl}/history/${shortSha}/`,
+    "http://www.w3.org/ns/prov#wasGeneratedBy":
+      `${pageUrl}/history/changelog/${year}/${month}#${shortSha}`,
+  };
 }
 
 interface FileGetContext {

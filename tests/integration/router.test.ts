@@ -20,6 +20,7 @@ const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn(() => true)
 const mockCommitFileOnBranch = vi.fn()
 const mockListDirectoryFromGitHub = vi.fn()
+const mockListCommitsForPath = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -28,7 +29,8 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     fetchFileFromGitHub: mockFetchFileFromGitHub,
     isPathSafe: mockIsPathSafe,
     commitFileOnBranch: mockCommitFileOnBranch,
-    listDirectoryFromGitHub: mockListDirectoryFromGitHub
+    listDirectoryFromGitHub: mockListDirectoryFromGitHub,
+    listCommitsForPath: mockListCommitsForPath
   }
 })
 
@@ -381,6 +383,8 @@ describe('router GET container listing', () => {
   beforeEach(() => {
     mockFetchFileFromGitHub.mockReset()
     mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockListCommitsForPath.mockResolvedValue([])
     mockListDirectoryFromGitHub.mockResolvedValue({
       status: 200,
       entries: [
@@ -405,6 +409,77 @@ describe('router GET container listing', () => {
       expect.objectContaining({ path: 'foo', ref: 'HEAD' })
     )
     expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/ emits memento/sameAs/wasGeneratedBy when the page has a commit', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abcdef1234567890abcdef1234567890abcdef12',
+        message: 'msg',
+        authorName: 'a',
+        authorEmail: 'a@b',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://github.com/...'
+      }
+    ])
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(
+      /<>\s+a\s+ldp:Container,\s+ldp:BasicContainer[\s\S]*<http:\/\/mementoweb\.org\/ns#memento>\s+<http:\/\/localhost\/foo\/history\/abcdef1\/>/
+    )
+    expect(body).toMatch(
+      /<http:\/\/www\.w3\.org\/2002\/07\/owl#sameAs>\s+<http:\/\/localhost\/foo\/history\/abcdef1\/>/
+    )
+    expect(body).toMatch(
+      /<http:\/\/www\.w3\.org\/ns\/prov#wasGeneratedBy>\s+<http:\/\/localhost\/foo\/history\/changelog\/2024\/03#abcdef1>/
+    )
+    expect(mockListCommitsForPath).toHaveBeenCalledWith(
+      expect.objectContaining({ perPage: 1, branch: 'HEAD', path: 'foo' })
+    )
+  })
+
+  it('GET /foo/ omits the provenance/memento triples when listCommitsForPath returns empty', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).not.toContain('mementoweb.org/ns#memento')
+    expect(body).not.toContain('owl#sameAs')
+    expect(body).not.toContain('prov#wasGeneratedBy')
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
+  })
+
+  it('GET /foo/history/draft/ does not call listCommitsForPath and does not emit provenance triples', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).not.toContain('mementoweb.org/ns#memento')
+    expect(body).not.toContain('owl#sameAs')
+    expect(body).not.toContain('prov#wasGeneratedBy')
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+  })
+
+  it('GET / (repo root) does not call listCommitsForPath and does not emit provenance triples', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).not.toContain('mementoweb.org/ns#memento')
+    expect(body).not.toContain('owl#sameAs')
+    expect(body).not.toContain('prov#wasGeneratedBy')
+    expect(mockListCommitsForPath).not.toHaveBeenCalled()
   })
 
   it('returns a Turtle listing for GET / with empty path', async () => {
