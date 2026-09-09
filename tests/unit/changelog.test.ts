@@ -293,13 +293,13 @@ describe('synthesizeActivityTriples', () => {
     expect(generatedQ).toBeDefined()
     expect(generatedQ!.subject.value).toBe(result.subject)
     expect(generatedQ!.object.termType).toBe('NamedNode')
-    expect(generatedQ!.object.value).toBe('https://example.com/foo#abc1234')
+    expect(generatedQ!.object.value).toBe('https://example.com/foo/history/abc1234')
 
     const usedQ = findQuad(result.quads, PROV_USED)
     expect(usedQ).toBeDefined()
     expect(usedQ!.subject.value).toBe(result.subject)
     expect(usedQ!.object.termType).toBe('NamedNode')
-    expect(usedQ!.object.value).toBe('https://example.com/foo#def5678')
+    expect(usedQ!.object.value).toBe('https://example.com/foo/history/def5678')
 
     const endedQ = findQuad(result.quads, PROV_ENDED)
     expect(endedQ).toBeDefined()
@@ -378,7 +378,7 @@ describe('synthesizeActivityTriples', () => {
     expect(result.subject).toBe('https://other.org/bar/history/changelog/2025/06#abc1234')
   })
 
-  it('prov:generated still points at the page-state fragment, not the month fragment', () => {
+  it('prov:generated points at the history folder for the commit, not at a page-relative fragment', () => {
     const commit: Commit = {
       sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
       message: 'msg',
@@ -397,10 +397,10 @@ describe('synthesizeActivityTriples', () => {
     const generatedQ = findQuad(result.quads, PROV_GENERATED)
     expect(generatedQ).toBeDefined()
     expect(generatedQ!.object.termType).toBe('NamedNode')
-    expect(generatedQ!.object.value).toBe('https://example.com/foo#abc1234')
+    expect(generatedQ!.object.value).toBe('https://example.com/foo/history/abc1234')
   })
 
-  it('prov:used still points at the page-state fragment of the predecessor', () => {
+  it('prov:used points at the history folder of the predecessor commit', () => {
     const commit: Commit = {
       sha: 'abc1234567890deadbeefdeadbeefdeadbeef0000',
       message: 'msg',
@@ -419,6 +419,6 @@ describe('synthesizeActivityTriples', () => {
     const usedQ = findQuad(result.quads, PROV_USED)
     expect(usedQ).toBeDefined()
     expect(usedQ!.object.termType).toBe('NamedNode')
-    expect(usedQ!.object.value).toBe('https://example.com/foo#def5678')
+    expect(usedQ!.object.value).toBe('https://example.com/foo/history/def5678')
   })
 })

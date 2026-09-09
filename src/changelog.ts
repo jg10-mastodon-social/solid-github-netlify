@@ -206,13 +206,14 @@ export interface SynthesizeResult {
  * fragment of the changelog month resource, not the page URL).
  * The synthesized triples are:
  *   - rdf:type prov:Activity
- *   - prov:generated <pageUrl>#<shortSha>
- *   - prov:used <pageUrl>#<prevShortSha>  (omitted when prevShortSha is null)
+ *   - prov:generated <pageUrl>/history/<shortSha>
+ *   - prov:used <pageUrl>/history/<prevShortSha>  (omitted when prevShortSha is null)
  *   - prov:endedAtTime "<commit.date>"^^xsd:dateTime
  *   - rdfs:label "<commit.message>"
  *
  * `prov:generated` / `prov:used` describe the page-state relationship
- * (the entity the activity produced / consumed), so they keep `pageUrl`.
+ * (the entity the activity produced / consumed), so they keep `pageUrl` —
+ * resolved through the history folder view so the link is addressable.
  *
  * The `shortSha` is derived by slicing `commit.sha` to its first 7
  * characters (matching the existing history-route convention).
@@ -234,7 +235,7 @@ export function synthesizeActivityTriples(
     DataFactory.quad(
       subjectNode,
       DataFactory.namedNode(PROV_GENERATED),
-      DataFactory.namedNode(`${pageUrl}#${shortSha}`),
+      DataFactory.namedNode(`${pageUrl}/history/${shortSha}`),
     ),
   ]
 
@@ -243,7 +244,7 @@ export function synthesizeActivityTriples(
       DataFactory.quad(
         subjectNode,
         DataFactory.namedNode(PROV_USED),
-        DataFactory.namedNode(`${pageUrl}#${prevShortSha}`),
+        DataFactory.namedNode(`${pageUrl}/history/${prevShortSha}`),
       ),
     )
   }

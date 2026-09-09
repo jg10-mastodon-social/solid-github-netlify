@@ -248,14 +248,14 @@ The changelog month is content-type-negotiable: today only Turtle is emitted, bu
      ```turtle
      <#abc1234>
          a prov:Activity ;
-         prov:generated <page_url>#abc1234 ;
-         prov:used <page_url>#def5678 ;
+         prov:generated <page_url>/history/abc1234 ;
+         prov:used <page_url>/history/def5678 ;
          prov:endedAtTime "2024-03-15T10:30:00Z"^^xsd:dateTime ;
          rdfs:label "Initial save" ;
          ex:custom "foo" .
      ```
 
-     `prov:used` is omitted for the very first commit ever. `rdfs:label` is the commit message (the file holds only the client payload — `ex:custom "foo"` in this example).
+     `prov:used` is omitted for the very first commit ever. `rdfs:label` is the commit message (the file holds only the client payload — `ex:custom "foo"` in this example). `prov:generated` / `prov:used` point at the per-commit history folder (`<page_url>/history/<shortSha>`) so the page-state relationships are addressable.
 5. Wrap with the LDP + AS envelope (`a as:OrderedCollectionPage`, `as:partOf`, inline `as:items`). The document is serialized with `baseIRI = <monthUrl>` so commit fragments serialize as `<#<shortSha>>`.
 6. The `.ttl` URL form (`/YYYY/MM.ttl`) and the trailing-slash form (`/YYYY/MM/`) both return 404 — the month is a resource, not a container, and the on-disk file extension is authoritative.
 7. Years/months outside `[REPO_START_YEAR, currentYear]` return 404.
