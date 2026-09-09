@@ -509,6 +509,64 @@ function buildCommitsUrl(options: ListCommitsForPathOptions): string {
   return `https://api.github.com/repos/${options.repo}/commits?${params.toString()}`
 }
 
+export interface GetCommitOptions {
+  repo: string
+  token: string
+  sha: string
+}
+
+/**
+ * Fetches a single commit by SHA (full or short prefix).
+ *
+ * GitHub's `/repos/:owner/:repo/commits/:ref` accepts short-SHA prefixes
+ * (≥7 hex chars) and resolves them to the unique matching commit. Returns
+ * `null` on 404, mirroring `listCommitsForPath`'s empty-on-404 semantics so
+ * callers can degrade gracefully (e.g. omit a `prov:wasGeneratedBy` triple
+ * without raising an error).
+ */
+export async function getCommit(
+  options: GetCommitOptions
+): Promise<Commit | null> {
+  if (options.token === 'dummy') {
+    return null
+  }
+  const url = `https://api.github.com/repos/${options.repo}/commits/${encodeURIComponent(options.sha)}`
+  const headers = jsonHeaders(options.token)
+
+  const response = await githubFetch(url, { method: 'GET', headers }, GitHubApiError)
+
+  if (response.status === 404) {
+    return null
+  }
+
+  const data = (await response.json()) as {
+    sha?: string
+    commit?: {
+      message?: string
+      author?: { name?: string; email?: string; date?: string }
+    }
+    author?: { login?: string } | null
+    html_url?: string
+  }
+
+  if (typeof data.sha !== 'string') {
+    throw new GitHubApiError('GitHub response missing commit.sha', 502)
+  }
+
+  return {
+    sha: data.sha,
+    message: data.commit?.message ?? '',
+    authorName: data.commit?.author?.name ?? '',
+    authorEmail: data.commit?.author?.email ?? '',
+    authorLogin:
+      data.author && typeof data.author === 'object' && typeof data.author.login === 'string'
+        ? data.author.login
+        : undefined,
+    date: data.commit?.author?.date ?? '',
+    htmlUrl: data.html_url ?? ''
+  }
+}
+
 export interface SquashMergeBranchOptions {
   repo: string
   token: string

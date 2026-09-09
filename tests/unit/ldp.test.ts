@@ -281,3 +281,116 @@ describe('serializeContainer with ActivityStreams options', () => {
     expect(turtle).not.toContain('as:next')
   })
 })
+
+describe('serializeContainer with extras', () => {
+  it('emits a single extra triple on the container subject for a non-empty container', () => {
+    const entries: ContainerEntry[] = [
+      { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' }
+    ]
+    const turtle = serializeContainer('/foo/', entries, undefined, {
+      'http://www.w3.org/ns/prov#wasGeneratedBy': '#activity'
+    })
+    expect(turtle).toMatch(
+      /<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*;/
+    )
+    expect(turtle).toContain(
+      '<http://www.w3.org/ns/prov#wasGeneratedBy> <#activity>'
+    )
+  })
+
+  it('emits a single extra triple on the container subject for an empty container', () => {
+    const turtle = serializeContainer('/foo/', [], undefined, {
+      'http://www.w3.org/ns/prov#wasGeneratedBy': '#activity'
+    })
+    expect(turtle).not.toMatch(/ldp:contains/)
+    expect(turtle).toMatch(
+      /<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*;\s+<http:\/\/www\.w3\.org\/ns\/prov#wasGeneratedBy>\s+<#activity>\s*\./,
+    )
+  })
+
+  it('emits multiple extra triples in the order they were declared', () => {
+    const entries: ContainerEntry[] = [
+      { name: 'a.txt', path: 'foo/a.txt', type: 'file', sha: 'sha-a' }
+    ]
+    const turtle = serializeContainer('/foo/', entries, undefined, {
+      'http://www.w3.org/ns/prov#wasGeneratedBy': '#activity',
+      'http://mementoweb.org/ns#original': '/foo/'
+    })
+    expect(turtle).toContain(
+      '<http://www.w3.org/ns/prov#wasGeneratedBy> <#activity>'
+    )
+    expect(turtle).toContain(
+      '<http://mementoweb.org/ns#original> </foo/>'
+    )
+    const wgbIdx = turtle.indexOf('prov#wasGeneratedBy')
+    const origIdx = turtle.indexOf('mementoweb.org/ns#original')
+    expect(wgbIdx).toBeGreaterThan(-1)
+    expect(origIdx).toBeGreaterThan(wgbIdx)
+  })
+
+  it('emits multiple object IRIs as a comma-separated object list when the value is an array', () => {
+    const turtle = serializeContainer('/foo/', [], undefined, {
+      'http://example.org/p': ['a', 'b']
+    })
+    expect(turtle).toMatch(/<http:\/\/example\.org\/p>\s+<a>,\s+<b>\s*\./)
+  })
+
+  it('combines extras with the existing AS option without affecting AS predicates', () => {
+    const as: AsCollectionOptions = {
+      kind: 'ordered_collection_page',
+      partOf: 'https://example.test/changelog'
+    }
+    const turtle = serializeContainer(
+      '/foo/',
+      [],
+      as,
+      {
+        'http://www.w3.org/ns/prov#wasGeneratedBy': '#activity'
+      },
+    )
+    expect(turtle).toContain('as:partOf <https://example.test/changelog>')
+    expect(turtle).toContain(
+      '<http://www.w3.org/ns/prov#wasGeneratedBy> <#activity>'
+    )
+  })
+
+  it('parses as valid Turtle when extras are supplied', () => {
+    const turtle = serializeContainer('/foo/', [], undefined, {
+      'http://www.w3.org/ns/prov#wasGeneratedBy': '#activity',
+      'http://mementoweb.org/ns#original': '/foo/'
+    })
+    const parser = new Parser({ baseIRI: 'https://example.test/foo/' })
+    expect(() => parser.parse(turtle)).not.toThrow()
+    const quads = [...parser.parse(turtle)]
+    const wgb = quads.find(
+      (q) =>
+        q.predicate.value ===
+        'http://www.w3.org/ns/prov#wasGeneratedBy'
+    )
+    expect(wgb?.object.value).toBe('https://example.test/foo/#activity')
+    const orig = quads.find(
+      (q) => q.predicate.value === 'http://mementoweb.org/ns#original'
+    )
+    expect(orig?.object.value).toBe('https://example.test/foo/')
+  })
+
+  it('omits a predicate entry whose value is an empty array', () => {
+    const turtle = serializeContainer('/foo/', [], undefined, {
+      'http://www.w3.org/ns/prov#wasGeneratedBy': [],
+      'http://mementoweb.org/ns#original': '/foo/'
+    })
+    expect(turtle).not.toContain('prov#wasGeneratedBy')
+    expect(turtle).toContain(
+      '<http://mementoweb.org/ns#original> </foo/>'
+    )
+  })
+
+  it('leaves output unchanged when extras is undefined or empty', () => {
+    const turtle1 = serializeContainer('/foo/', [], undefined, undefined)
+    const turtle2 = serializeContainer('/foo/', [], undefined, {})
+    expect(turtle1).not.toContain('prov#')
+    expect(turtle1).not.toContain('mementoweb.org')
+    expect(turtle2).not.toContain('prov#')
+    expect(turtle2).not.toContain('mementoweb.org')
+  })
+})

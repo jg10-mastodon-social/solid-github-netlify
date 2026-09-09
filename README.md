@@ -279,6 +279,13 @@ The history tree under `/:page*/history/` is an LDP-navigable view of `${GITHUB_
 | `GET /:page/history/<shortSha>/<doc*>` | file content at that commit | 1 (`fetchFileFromGitHub`) |
 | `GET /:page/history/YYYY/MM/<shortSha>/<doc*>` | same as above (year/month prefix ignored) | 1 |
 
+Commit-folder containers (`<shortSha>/`) carry two extra triples in Turtle form for provenance:
+
+- `<http://www.w3.org/ns/prov#wasGeneratedBy>` — the corresponding `prov:Activity` in the changelog: `<pageUrl>/history/changelog/YYYY/MM#<shortSha>`. The year/month is derived from the commit's author date via an extra `GET /repos/:owner/:repo/commits/:ref` (GitHub resolves 7-char short SHAs natively). If the commit lookup fails, this triple is omitted.
+- `<http://mementoweb.org/ns#original>` — the version-independent page root: `<pageUrl>/`.
+
+These are emitted unconditionally alongside `ldp:contains`, regardless of whether the container is empty.
+
 Date-scoped `listCommitsForPath` calls cap at `perPage=100` (the GitHub API's first page). Year/month listings for pages with >100 commits affecting them in a given window are silently truncated — only the first 100 commits are reflected in `<MM>/` or `<shortSha>/` children.
 
 Content negotiation: `Accept: text/turtle` (or absent) → `text/turtle; charset=utf-8`; `Accept: text/html` → `text/html; charset=utf-8`. The HTML form renders a `<ul>` of `<a href>` children, suitable for browser navigation.

@@ -125,10 +125,13 @@ export function formatContainerHtml(
   return body.join('\n') + '\n'
 }
 
+export type Extras = Record<string, string | string[]>
+
 export function serializeContainer(
   containerUri: string,
   entries: ContainerEntry[],
-  as?: AsCollectionOptions
+  as?: AsCollectionOptions,
+  extras?: Extras
 ): string {
   const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path))
   const lines: string[] = [`@prefix ldp: <${LDP_NS}> .`]
@@ -152,6 +155,15 @@ export function serializeContainer(
     if (as.prev) tail.push(`   as:prev <${as.prev}>`)
     if (as.next) tail.push(`   as:next <${as.next}>`)
     if (as.items && as.items.length > 0) tail.push(`   as:items ${as.items.join(', ')}`)
+  }
+  if (extras) {
+    for (const [predicate, value] of Object.entries(extras)) {
+      const values = Array.isArray(value) ? value : [value]
+      const filtered = values.filter((v) => v.length > 0)
+      if (filtered.length === 0) continue
+      const objs = filtered.map((v) => `<${v}>`).join(', ')
+      tail.push(`   <${predicate}> ${objs}`)
+    }
   }
 
   if (tail.length === 0) {

@@ -38,6 +38,7 @@ const mockListDirectoryFromGitHub = vi.fn()
 const mockListCommitsForPath = vi.fn()
 const mockSquashMergeBranch = vi.fn()
 const mockDeleteBranch = vi.fn()
+const mockGetCommit = vi.fn()
 
 vi.mock('../../src/github.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/github.js')>()
@@ -50,7 +51,8 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     listDirectoryFromGitHub: mockListDirectoryFromGitHub,
     listCommitsForPath: mockListCommitsForPath,
     squashMergeBranch: mockSquashMergeBranch,
-    deleteBranch: mockDeleteBranch
+    deleteBranch: mockDeleteBranch,
+    getCommit: mockGetCommit
   }
 })
 
@@ -3104,6 +3106,8 @@ describe('router commit folder', () => {
     mockIsPathSafe.mockReturnValue(true)
     mockCommitFileOnBranch.mockReset()
     mockGetFileBlobSha.mockReset()
+    mockGetCommit.mockReset()
+    mockGetCommit.mockResolvedValue(null)
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -3186,7 +3190,8 @@ describe('router commit folder', () => {
     expect(res.status).toBe(200)
     const body = await res.text()
     expect(body).not.toMatch(/ldp:contains/)
-    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
+    expect(body).toContain('mementoweb.org/ns#original')
   })
 
   it('returns 404 when the page folder does not exist at the commit', async () => {
@@ -3255,6 +3260,143 @@ describe('router commit folder', () => {
     expect(res.status).toBe(200)
     const body = await res.text()
     expect(body).toMatch(/<!doctype html>/i)
+  })
+
+  it('emits prov:wasGeneratedBy pointing at the changelog activity for the commit (using commit date year/month)', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' }
+      ]
+    })
+    mockGetCommit.mockResolvedValueOnce({
+      sha: 'abcdef1234567890abcdef1234567890abcdef12',
+      message: 'msg',
+      authorName: 'a',
+      authorEmail: 'a@b',
+      date: '2024-03-15T10:00:00Z',
+      htmlUrl: 'https://github.com/...'
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(mockGetCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: 'abc1234' })
+    )
+    expect(body).toMatch(
+      /<http:\/\/www\.w3\.org\/ns\/prov#wasGeneratedBy>\s+<http:\/\/localhost\/foo\/history\/changelog\/2024\/03#abc1234>\s*[.;]/
+    )
+  })
+
+  it('emits memento:original pointing at the page root', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' }
+      ]
+    })
+    mockGetCommit.mockResolvedValueOnce({
+      sha: 'abcdef1234567890abcdef1234567890abcdef12',
+      message: 'msg',
+      authorName: 'a',
+      authorEmail: 'a@b',
+      date: '2024-03-15T10:00:00Z',
+      htmlUrl: 'https://github.com/...'
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(
+      /<http:\/\/mementoweb\.org\/ns#original>\s+<http:\/\/localhost\/foo\/>\s*[.;]/
+    )
+  })
+
+  it('omits prov:wasGeneratedBy but keeps memento:original when getCommit returns null', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'foo/index.html', type: 'file', sha: 'sha-1' }
+      ]
+    })
+    mockGetCommit.mockResolvedValueOnce(null)
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).not.toContain('prov#wasGeneratedBy')
+    expect(body).toMatch(
+      /<http:\/\/mementoweb\.org\/ns#original>\s+<http:\/\/localhost\/foo\/>/
+    )
+  })
+
+  it('emits prov:wasGeneratedBy and memento:original even when the folder is empty', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+    mockGetCommit.mockResolvedValueOnce({
+      sha: 'abcdef1234567890abcdef1234567890abcdef12',
+      message: 'msg',
+      authorName: 'a',
+      authorEmail: 'a@b',
+      date: '2026-08-01T00:00:00Z',
+      htmlUrl: 'https://github.com/...'
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/foo/history/abc1234', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('prov#wasGeneratedBy')
+    expect(body).toContain(
+      'changelog/2026/08#abc1234'
+    )
+    expect(body).toContain('mementoweb.org/ns#original')
   })
 })
 

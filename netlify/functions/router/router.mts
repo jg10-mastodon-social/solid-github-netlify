@@ -4,6 +4,7 @@ import { loadGithubConfig, loadWriteConfig } from "../../../src/config.js";
 import {
   commitFileOnBranch,
   fetchFileFromGitHub,
+  getCommit,
   getFileBlobSha,
   GitHubApiError,
   GitHubFetchError,
@@ -22,6 +23,7 @@ import {
   serializeContainer,
   formatContainerHtml,
   type AsCollectionOptions,
+  type Extras,
 } from "../../../src/ldp.js";
 import { parseHistoryPath, type HistoryPath } from "../../../src/history.js";
 import {
@@ -397,12 +399,13 @@ function renderContainerResponse(
   entries: { name: string; path: string; type: "dir" | "file" | string; sha: string }[],
   corsHeaders: Record<string, string>,
   cacheControl: string = "public, max-age=86400, stale-while-revalidate=259200",
+  extras?: Extras,
 ): Response {
   const accept = req.headers.get("Accept") ?? "";
   const wantHtml = accept.includes("text/html") && !accept.includes("text/turtle");
   const body = wantHtml
     ? formatContainerHtml(containerUri, title, entries as any)
-    : serializeContainer(containerUri, entries as any);
+    : serializeContainer(containerUri, entries as any, undefined, extras);
   const headers: Record<string, string> = {
     ...corsHeaders,
     "Content-Type": wantHtml
@@ -431,6 +434,27 @@ async function serveCommitFolder(
     return notFound(corsHeaders);
   }
 
+  const origin = new URL(req.url).origin;
+  const pageUrl = `${origin}/${page}`;
+  const extras: Extras = {
+    "http://mementoweb.org/ns#original": `${pageUrl}/`
+  };
+
+  const commit = await getCommit({
+    repo: githubRepo,
+    token: githubToken,
+    sha: shortSha
+  }).catch(() => null);
+
+  if (commit && commit.date) {
+    const year = new Date(commit.date).getUTCFullYear();
+    const month = new Date(commit.date).getUTCMonth() + 1;
+    const monthPadded = String(month).padStart(2, "0");
+    const monthUrl = `${pageUrl}/history/changelog/${year}/${monthPadded}`;
+    extras["http://www.w3.org/ns/prov#wasGeneratedBy"] =
+      `${monthUrl}#${shortSha}`;
+  }
+
   return renderContainerResponse(
     req,
     `/${page}/`,
@@ -438,6 +462,7 @@ async function serveCommitFolder(
     result.entries,
     corsHeaders,
     "public, max-age=31536000, immutable",
+    extras
   );
 }
 
