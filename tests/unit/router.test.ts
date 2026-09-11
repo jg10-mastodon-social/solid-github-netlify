@@ -244,6 +244,30 @@ describe('router GET proxies a file from GitHub', () => {
     )
   })
 
+  it('serves a repo-root file when the URL has no page prefix (regression: /index.ttl)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('@prefix ex: <http://example/> .'),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: 'W/"root"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/index.ttl', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { doc: 'index.ttl' } }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'index.ttl', ref: 'HEAD' })
+    )
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('undefined') })
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(await res.text()).toBe('@prefix ex: <http://example/> .')
+  })
+
   it('uses config.githubRef as the ref on the published route', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
@@ -300,6 +324,24 @@ describe('router GET proxies a file from GitHub', () => {
 
     expect(res.status).toBe(404)
     expect(await res.text()).toBe('Not Found')
+  })
+
+  it('forwards the upstream Content-Type on a 404 instead of guessing from the file extension', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody('{"message":"Not Found"}'),
+      contentType: 'application/json; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/missing.ttl', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'missing.ttl' } }))
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('Content-Type')).toBe('application/json; charset=utf-8')
+    expect(await res.text()).toBe('{"message":"Not Found"}')
   })
 
   it('returns 400 when the assembled path is unsafe', async () => {
@@ -408,6 +450,26 @@ describe('router GET on draft route', () => {
 
     expect(res.status).toBe(400)
     expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('reads a root-level file from the literal "draft" branch when no page prefix is given', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('draft root'),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: 'W/"d"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/index.ttl', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { doc: 'index.ttl' } }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'index.ttl', ref: 'draft' })
+    )
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('draft root')
   })
 })
 
@@ -569,6 +631,37 @@ describe('router PUT commit flow', () => {
 
     expect(res.status).toBe(502)
     expect(await res.text()).toBe('network down')
+  })
+
+  it('commits a root-level file to the literal "draft" branch when no page prefix is given', async () => {
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'root-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/root',
+      branch: 'draft',
+      contentSha: 'root-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/index.ttl', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/turtle' },
+      body: '<> a <http://example/> .'
+    })
+    const res = await handler(req, makeContext({ params: { doc: 'index.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledTimes(1)
+    expect(mockCommitFileOnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branch: 'draft',
+        path: 'index.ttl',
+        baseRef: 'HEAD'
+      })
+    )
+    const body = await res.json()
+    expect(body).toEqual(
+      expect.objectContaining({ branch: 'draft', path: 'index.ttl' })
+    )
   })
 })
 
@@ -1770,6 +1863,42 @@ ex:alice ex:knows ex:bob .
     expect(res.status).toBe(200)
     expect(res.headers.get('ETag')).toBe('"new-blob-sha"')
   })
+
+  it('patches a root-level file at the repo root when no page prefix is given', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'root-sha',
+      htmlUrl: 'https://example/commit/root',
+      branch: 'draft',
+      contentSha: 'root-blob-sha'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:a ex:p ex:b .')
+    })
+    const res = await handler(req, makeContext({ params: { doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'data.ttl', ref: 'draft' })
+    )
+    expect(mockCommitFileOnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'draft', path: 'data.ttl' })
+    )
+  })
 })
 
 describe('router changelog month PATCH handler', () => {
@@ -2836,6 +2965,29 @@ describe('router GET container listing', () => {
     expect(body).not.toContain('owl#sameAs')
     expect(body).not.toContain('prov#wasGeneratedBy')
     expect(mockListCommitsForPath).not.toHaveBeenCalled()
+  })
+
+  it('serves GET /history/draft/ as the root container on the literal "draft" branch (regression: empty page splat)', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.ttl', path: 'index.ttl', type: 'file', sha: 'sha-i' },
+        { name: 'README.md', path: 'README.md', type: 'file', sha: 'sha-r' }
+      ]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '', ref: 'draft' })
+    )
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ref: expect.stringContaining('-draft') })
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
   })
 })
 

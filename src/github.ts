@@ -101,10 +101,13 @@ export async function fetchFileFromGitHub(
   const response = await githubFetch(url, { method: 'GET', headers }, GitHubFetchError)
 
   const body = new Uint8Array(await response.arrayBuffer())
+  const upstreamContentType = response.headers.get('content-type')
   return {
     status: response.status,
     body,
-    contentType: contentTypeFromPath(options.path) ?? response.headers.get('content-type'),
+    contentType: response.ok
+      ? (contentTypeFromPath(options.path) ?? upstreamContentType)
+      : (upstreamContentType ?? contentTypeFromPath(options.path)),
     etag: response.headers.get('etag'),
     cacheControl: response.headers.get('cache-control')
   }

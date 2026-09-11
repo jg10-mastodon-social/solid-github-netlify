@@ -558,7 +558,7 @@ async function handlePut(
   }
 
   const { page, doc } = context.params;
-  const path = `${page}/${doc}`;
+  const path = page ? `${page}/${doc}` : doc;
 
   if (!isPathSafe(path)) {
     return new Response("Unsafe path", {
@@ -581,7 +581,7 @@ async function handlePut(
   }
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
-  const branch = `${page}-draft`;
+  const branch = page ? `${page}-draft` : "draft";
   const body = await req.arrayBuffer();
   const content = Buffer.from(body).toString("base64");
   const message = `Update ${path} via solid-github-netlify`;
@@ -692,7 +692,7 @@ async function handlePatch(
       headers: corsHeaders,
     });
   }
-  const path = `${page}/${doc}`;
+  const path = page ? `${page}/${doc}` : doc;
 
   if (!isPathSafe(path)) {
     return new Response("Unsafe path", {
@@ -721,7 +721,7 @@ async function handlePatch(
   const ifMatch = parseIfMatch(ifMatchHeader);
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
-  const branch = `${page}-draft`;
+  const branch = page ? `${page}-draft` : "draft";
 
   const body = new Uint8Array(await req.arrayBuffer());
 
@@ -1177,7 +1177,7 @@ async function handleChangelogMonthPatch(
   const ifMatch = parseIfMatch(ifMatchHeader);
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
-  const branch = `${page}-draft`;
+  const branch = page ? `${page}-draft` : "draft";
 
   const body = new Uint8Array(await req.arrayBuffer());
 
@@ -1345,7 +1345,7 @@ async function handleChangelogPost(
   }
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
-  const branch = `${page}-draft`;
+  const branch = page ? `${page}-draft` : "draft";
 
   const body = await req.text();
 
@@ -1521,9 +1521,16 @@ async function handleGet(
   if (isContainer) {
     const stripped = pathname.replace(/\/+$/, "").replace(/^\/+/, "");
     if (draft) {
-      const page = stripped.replace(/\/history\/draft$/, "");
+      let page: string;
+      if (stripped === "history/draft") {
+        page = "";
+      } else if (stripped.endsWith("/history/draft")) {
+        page = stripped.slice(0, -"/history/draft".length);
+      } else {
+        page = stripped;
+      }
       path = page;
-      ref = `${page}-draft`;
+      ref = page ? `${page}-draft` : "draft";
       containerUri = `/${page}${page ? "/" : ""}`;
     } else {
       path = stripped;
@@ -1532,8 +1539,8 @@ async function handleGet(
     }
   } else {
     const { page, doc } = context.params;
-    path = `${page}/${doc}`;
-    ref = draft ? `${page}-draft` : githubRef;
+    path = page ? `${page}/${doc}` : doc;
+    ref = draft ? (page ? `${page}-draft` : "draft") : githubRef;
     containerUri = "";
   }
 

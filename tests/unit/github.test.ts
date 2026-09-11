@@ -328,6 +328,25 @@ describe('fetchFileFromGitHub', () => {
       })
     ).rejects.toBeInstanceOf(GitHubFetchError)
   })
+
+  it('returns the upstream content-type (not the extension guess) on a 404', async () => {
+    mockFetchOnce(
+      new Response('{"message":"Not Found"}', {
+        status: 404,
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      })
+    )
+
+    const result = await fetchFileFromGitHub({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      ref: 'main',
+      path: 'index.ttl'
+    })
+
+    expect(result.status).toBe(404)
+    expect(result.contentType).toBe('application/json; charset=utf-8')
+  })
 })
 
 describe('getBranchRef', () => {
