@@ -2839,6 +2839,282 @@ describe('router GET container listing', () => {
   })
 })
 
+describe('router GET directory-index for /:page*/ with Accept preferring HTML', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockListCommitsForPath.mockResolvedValue([])
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+    mockVerifyDpopToken.mockReset()
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: [] as string[] })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  it('GET /foo/ with Accept: text/html serves foo/index.html from GitHub', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('<html>foo index</html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: 'W/"idx"',
+      cacheControl: 'public, max-age=60'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('<html>foo index</html>')
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('ETag')).toBe('W/"idx"')
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo/index.html', ref: 'HEAD' })
+    )
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET / (root) with Accept: text/html serves index.html at the repo root', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('<html>root</html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'index.html', ref: 'HEAD' })
+    )
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/ with Accept: text/html and no index.html falls back to Turtle listing', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-b' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo', ref: 'HEAD' })
+    )
+  })
+
+  it('GET /foo/ with Accept: text/turtle skips the index lookup and serves Turtle directly', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-b' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/ with no Accept header keeps the legacy Turtle default', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/ with Accept: text/html and If-None-Match forwards the header to GitHub and emits Vary', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 304,
+      body: textBody(''),
+      contentType: null,
+      etag: 'W/"idx"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/html', 'If-None-Match': 'W/"idx"' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(304)
+    expect(res.headers.get('Vary')).toContain('If-None-Match')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ ifNoneMatch: 'W/"idx"' })
+    )
+  })
+
+  it('GET /foo/history/draft/ with Accept: text/html serves draft index.html read-only', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('<html>draft index</html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: 'W/"d"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+    expect(res.headers.get('Allow')).toBeNull()
+    expect(res.headers.get('Accept-Put')).toBeNull()
+    expect(res.headers.get('Accept-Patch')).toBeNull()
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo/index.html', ref: 'foo-draft' })
+    )
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/history/draft/ with Accept: text/html and no index.html falls back to the existing Turtle listing', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo', ref: 'foo-draft' })
+    )
+  })
+
+  it('GET /foo/ with Accept: text/html,application/xhtml+xml serves index.html', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('<html>x</html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/html,application/xhtml+xml' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'foo/index.html' })
+    )
+  })
+
+  it('GET /foo/ with Accept: text/html;q=0.5, text/turtle;q=0.9 prefers Turtle (no index lookup)', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: []
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/html;q=0.5, text/turtle;q=0.9' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/history/ (history root) is never routed to the index lookup', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: '' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
+  })
+})
+
 describe('router history root', () => {
   beforeEach(() => {
     mockFetchFileFromGitHub.mockReset()

@@ -6,6 +6,7 @@ import {
   fetchFileFromGitHub,
   getCommit,
   getFileBlobSha,
+  type GitHubFileResult,
   GitHubApiError,
   GitHubFetchError,
   isPathSafe,
@@ -39,6 +40,7 @@ import {
 } from "../../../src/changelog.js";
 import { Parser, Writer, DataFactory } from "n3";
 import type { Quad } from "@rdfjs/types";
+import { wantsHtmlOverTurtle } from "../../../src/wantsHtmlOverTurtle.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -1542,6 +1544,20 @@ async function handleGet(
     });
   }
 
+  if (isContainer && wantsHtmlOverTurtle(req.headers.get("Accept"))) {
+    const indexPath = path === "" ? "index.html" : `${path}/index.html`;
+    const indexResult = await fetchFileFromGitHub({
+      repo: githubRepo,
+      token: githubToken,
+      ref,
+      path: indexPath,
+      ifNoneMatch: req.headers.get("if-none-match") ?? undefined,
+    });
+    if (indexResult.status === 200 || indexResult.status === 304) {
+      return buildDirectoryIndexResponse(indexResult, req, corsHeaders, draft);
+    }
+  }
+
   let authResult: AuthResponse | undefined;
   let writeWebIds: string[] = [];
   if (draft) {
@@ -1778,6 +1794,29 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
       headers: ctx.corsHeaders,
     });
   }
+}
+
+function buildDirectoryIndexResponse(
+  result: GitHubFileResult,
+  req: Request,
+  corsHeaders: Record<string, string>,
+  draft: boolean,
+): Response {
+  const headers: Record<string, string> = { ...corsHeaders };
+  if (result.contentType) headers["Content-Type"] = result.contentType;
+  if (result.etag) headers["ETag"] = result.etag;
+  if (req.headers.get("if-none-match")) {
+    headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
+  }
+  if (draft) {
+    headers["WAC-Allow"] = 'user="read", public="read"';
+    headers["Cache-Control"] = DRAFT_CACHE_CONTROL;
+    headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
+  } else if (result.cacheControl) {
+    headers["Cache-Control"] = result.cacheControl;
+  }
+  const body = result.status === 304 ? null : (result.body as BodyInit);
+  return new Response(body, { status: result.status, headers });
 }
 
 const getCorsHeaders = (origin: string | null) => ({
