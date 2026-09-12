@@ -183,8 +183,8 @@ describe('parseHistoryPath', () => {
       expect(parseHistoryPath('/2026')).toBeNull()
     })
 
-    it('rejects an empty trailing segment (trailing slash)', () => {
-      expect(parseHistoryPath('2026/')).toBeNull()
+    it('accepts a trailing slash on a year (canonical container form)', () => {
+      expect(parseHistoryPath('2026/')).toEqual({ kind: 'year', year: 2026 })
     })
 
     it('rejects a year followed by a 3-digit segment (not YYYY/MM)', () => {
@@ -265,6 +265,59 @@ describe('parseHistoryPath', () => {
 
     it('rejects "changelog/draft" (year segment "draft" is invalid)', () => {
       expect(parseHistoryPath('changelog/draft')).toBeNull()
+    })
+  })
+
+  describe('trailing-slash form for containers', () => {
+    it('parses "2026/" (trailing slash on year) as year', () => {
+      expect(parseHistoryPath('2026/')).toEqual({ kind: 'year', year: 2026 })
+    })
+
+    it('parses "2026/08/" (trailing slash on month) as month', () => {
+      expect(parseHistoryPath('2026/08/')).toEqual({
+        kind: 'month',
+        year: 2026,
+        month: 8
+      })
+    })
+
+    it('parses "abc1234/" (trailing slash on shortSha) as commit_folder', () => {
+      expect(parseHistoryPath('abc1234/')).toEqual({
+        kind: 'commit_folder',
+        shortSha: 'abc1234'
+      })
+    })
+
+    it('parses "2024/abc1234/" (year-prefixed commit folder with trailing slash) as commit_folder', () => {
+      expect(parseHistoryPath('2024/abc1234/')).toEqual({
+        kind: 'commit_folder',
+        shortSha: 'abc1234',
+        bucketPrefix: '2024'
+      })
+    })
+
+    it('parses "2026/08/abc1234/" (year-month-prefixed commit folder with trailing slash) as commit_folder', () => {
+      expect(parseHistoryPath('2026/08/abc1234/')).toEqual({
+        kind: 'commit_folder',
+        shortSha: 'abc1234',
+        bucketPrefix: '2026/08'
+      })
+    })
+
+    it('rejects a commit_file with trailing slash (resource, not container)', () => {
+      expect(parseHistoryPath('abc1234/foo.txt/')).toBeNull()
+    })
+
+    it('rejects a bucket-prefixed commit_file with trailing slash', () => {
+      expect(parseHistoryPath('2026/08/abc1234/foo.txt/')).toBeNull()
+    })
+
+    it('rejects a year with middle empty segment (security)', () => {
+      expect(parseHistoryPath('2026//')).toBeNull()
+    })
+
+    it('rejects "YYYY//MM" (middle empty segment)', () => {
+      expect(parseHistoryPath('2026//08')).toBeNull()
     })
   })
 })

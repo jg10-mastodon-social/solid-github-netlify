@@ -3253,7 +3253,7 @@ describe('router GET directory-index for /:page*/ with Accept preferring HTML', 
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', {
+    const req = new Request('http://localhost/foo/history/', {
       method: 'GET',
       headers: { Accept: 'text/html' }
     })
@@ -3287,9 +3287,9 @@ describe('router history root', () => {
     expect(config.path).toContain('/:page*/history/:rest*')
   })
 
-  it('GET /foo/history with Accept: text/turtle returns an LDP BasicContainer listing years', async () => {
+  it('GET /foo/history/ with Accept: text/turtle returns an LDP BasicContainer listing years', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', {
+    const req = new Request('http://localhost/foo/history/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
@@ -3309,7 +3309,7 @@ describe('router history root', () => {
   it('lists years from REPO_START_YEAR through currentYear as ldp:contains children', async () => {
     const currentYear = new Date().getUTCFullYear()
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', {
+    const req = new Request('http://localhost/foo/history/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
@@ -3324,7 +3324,7 @@ describe('router history root', () => {
 
   it('history_root listing includes <changelog/> as an ldp:contains child', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', {
+    const req = new Request('http://localhost/foo/history/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
@@ -3341,7 +3341,7 @@ describe('router history root', () => {
 
   it('history_root listing includes <draft/> as an ldp:contains child', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', {
+    const req = new Request('http://localhost/foo/history/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
@@ -3358,7 +3358,7 @@ describe('router history root', () => {
 
   it('history_root listing lists <changelog/> and <draft/> unconditionally without any GitHub API calls', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/', { method: 'GET' })
     await handler(req, makeContext({ params: { page: 'foo', rest: '' } }))
 
     expect(mockListCommitsForPath).not.toHaveBeenCalled()
@@ -3368,7 +3368,7 @@ describe('router history root', () => {
 
   it('emits a 1-day max-age Cache-Control header', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/', { method: 'GET' })
     const res = await handler(
       req,
       makeContext({ params: { page: 'foo', rest: '' } })
@@ -3381,16 +3381,16 @@ describe('router history root', () => {
 
   it('makes zero GitHub API calls for the history root', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/', { method: 'GET' })
     await handler(req, makeContext({ params: { page: 'foo', rest: '' } }))
 
     expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
     expect(mockFetchFileFromGitHub).not.toHaveBeenCalled()
   })
 
-  it('GET /foo/history with Accept: text/html returns an HTML container', async () => {
+  it('GET /foo/history/ with Accept: text/html returns an HTML container', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history', {
+    const req = new Request('http://localhost/foo/history/', {
       method: 'GET',
       headers: { Accept: 'text/html' }
     })
@@ -3444,19 +3444,19 @@ describe('router year/month containers', () => {
     })
   })
 
-  it('GET /foo/history/2026 (in range) calls listCommitsForPath with since/until for the year', async () => {
+  it('GET /foo/history/2026/ (in range) calls listCommitsForPath with since/until for the year', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026', {
+    const req = new Request('http://localhost/foo/history/2026/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026' } })
+      makeContext({ params: { page: 'foo', rest: '2026/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3468,7 +3468,7 @@ describe('router year/month containers', () => {
     expect(args.until).toBe('2026-12-31T23:59:59Z')
   })
 
-  it('GET /foo/history/2026 emits an LDP container of MM/ children for months with commits', async () => {
+  it('GET /foo/history/2026/ emits an LDP container of MM/ children for months with commits', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([
       {
         sha: 'a1',
@@ -3491,13 +3491,13 @@ describe('router year/month containers', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026', {
+    const req = new Request('http://localhost/foo/history/2026/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026' } })
+      makeContext({ params: { page: 'foo', rest: '2026/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3507,19 +3507,19 @@ describe('router year/month containers', () => {
     expect(body).not.toContain('<02/>')
   })
 
-  it('GET /foo/history/2026 with no commits returns an empty LDP container (200 with empty ldp:contains)', async () => {
+  it('GET /foo/history/2026/ with no commits returns an empty LDP container (200 with empty ldp:contains)', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026', {
+    const req = new Request('http://localhost/foo/history/2026/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026' } })
+      makeContext({ params: { page: 'foo', rest: '2026/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3528,19 +3528,19 @@ describe('router year/month containers', () => {
     expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer\s*\./)
   })
 
-  it('GET /foo/history/2026/08 calls listCommitsForPath with since/until for that month', async () => {
+  it('GET /foo/history/2026/08/ calls listCommitsForPath with since/until for that month', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026/08', {
+    const req = new Request('http://localhost/foo/history/2026/08/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+      makeContext({ params: { page: 'foo', rest: '2026/08/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3549,7 +3549,7 @@ describe('router year/month containers', () => {
     expect(args.until).toBe('2026-08-31T23:59:59Z')
   })
 
-  it('GET /foo/history/2026/08 emits ldp:contains of <shortSha>/ for each commit in that month', async () => {
+  it('GET /foo/history/2026/08/ emits ldp:contains of <shortSha>/ for each commit in that month', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([
       {
         sha: 'abc1234567890',
@@ -3572,13 +3572,13 @@ describe('router year/month containers', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026/08', {
+    const req = new Request('http://localhost/foo/history/2026/08/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+      makeContext({ params: { page: 'foo', rest: '2026/08/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3587,19 +3587,19 @@ describe('router year/month containers', () => {
     expect(body).toContain('<def6789/>')
   })
 
-  it('GET /foo/history/2026/08 with no commits returns 200 empty container', async () => {
+  it('GET /foo/history/2026/08/ with no commits returns 200 empty container', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026/08', {
+    const req = new Request('http://localhost/foo/history/2026/08/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+      makeContext({ params: { page: 'foo', rest: '2026/08/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3614,37 +3614,37 @@ describe('router year/month containers', () => {
       '../../netlify/functions/router/router.mts'
     )
 
-    const yearReq = new Request('http://localhost/foo/history/2026', {
+    const yearReq = new Request('http://localhost/foo/history/2026/', {
       method: 'GET'
     })
     const yearRes = await handler(
       yearReq,
-      makeContext({ params: { page: 'foo', rest: '2026' } })
+      makeContext({ params: { page: 'foo', rest: '2026/' } })
     )
     expect(yearRes.headers.get('Cache-Control')).toMatch(/max-age=86400/)
 
-    const monthReq = new Request('http://localhost/foo/history/2026/08', {
+    const monthReq = new Request('http://localhost/foo/history/2026/08/', {
       method: 'GET'
     })
     const monthRes = await handler(
       monthReq,
-      makeContext({ params: { page: 'foo', rest: '2026/08' } })
+      makeContext({ params: { page: 'foo', rest: '2026/08/' } })
     )
     expect(monthRes.headers.get('Cache-Control')).toMatch(/max-age=86400/)
   })
 
-  it('GET /foo/history/2026 with Accept: text/html returns an HTML container', async () => {
+  it('GET /foo/history/2026/ with Accept: text/html returns an HTML container', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/2026', {
+    const req = new Request('http://localhost/foo/history/2026/', {
       method: 'GET',
       headers: { Accept: 'text/html' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: '2026' } })
+      makeContext({ params: { page: 'foo', rest: '2026/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3683,13 +3683,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3711,13 +3711,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     const body = await res.text()
@@ -3734,13 +3734,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3759,13 +3759,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(404)
@@ -3780,12 +3780,12 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET'
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.headers.get('Cache-Control')).toBe(
@@ -3804,13 +3804,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/html' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3837,13 +3837,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3875,13 +3875,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3903,13 +3903,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -3937,13 +3937,13 @@ describe('router commit folder', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'GET',
       headers: { Accept: 'text/turtle' }
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4239,14 +4239,14 @@ describe('router PUT rejection on commit-addressed URLs', () => {
     const { default: handler } = await import(
       '../../netlify/functions/router/router.mts'
     )
-    const req = new Request('http://localhost/foo/history/abc1234', {
+    const req = new Request('http://localhost/foo/history/abc1234/', {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain' },
       body: 'hello'
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
     )
 
     expect(res.status).toBe(405)
@@ -4672,10 +4672,10 @@ describe('router changelog root GET', () => {
     ] as any)
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4686,10 +4686,10 @@ describe('router changelog root GET', () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4719,10 +4719,10 @@ describe('router changelog root GET', () => {
     ] as any)
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4738,10 +4738,10 @@ describe('router changelog root GET', () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
     await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
     )
 
     expect(mockListCommitsForPath).toHaveBeenCalledTimes(1)
@@ -4781,10 +4781,10 @@ describe('router changelog root GET', () => {
     ] as any)
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4822,12 +4822,12 @@ describe('router changelog year GET', () => {
     ] as any)
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/', {
       method: 'GET'
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4837,12 +4837,12 @@ describe('router changelog year GET', () => {
   it('returns 404 when year is after currentYear', async () => {
     const currentYear = new Date().getUTCFullYear()
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request(`http://localhost/foo/history/changelog/${currentYear + 100}`, {
+    const req = new Request(`http://localhost/foo/history/changelog/${currentYear + 100}/`, {
       method: 'GET'
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: `changelog/${currentYear + 100}` } })
+      makeContext({ params: { page: 'foo', rest: `changelog/${currentYear + 100}/` } })
     )
 
     expect(res.status).toBe(404)
@@ -4870,12 +4870,12 @@ describe('router changelog year GET', () => {
     ] as any)
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/', {
       method: 'GET'
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/' } })
     )
 
     expect(res.status).toBe(200)
@@ -4895,12 +4895,12 @@ describe('router changelog year GET', () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/', {
       method: 'GET'
     })
     await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/' } })
     )
 
     expect(mockListCommitsForPath).toHaveBeenCalledTimes(1)
@@ -4914,12 +4914,12 @@ describe('router changelog year GET', () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/history/changelog/2024', {
+    const req = new Request('http://localhost/foo/history/changelog/2024/', {
       method: 'GET'
     })
     const res = await handler(
       req,
-      makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/' } })
     )
 
     expect(res.status).toBe(200)
@@ -5215,5 +5215,298 @@ describe('router changelog month GET', () => {
     expect(body).toMatch(/as:items\s+<#abc1234>/)
     // Activity must NOT be addressed as a fragment of the page (/foo)
     expect(body).not.toContain('<http://localhost/foo#abc1234>')
+  })
+})
+
+describe('router trailing-slash redirect for history containers', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockGetCommit.mockReset()
+    mockGetCommit.mockResolvedValue(null)
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  describe('GET no-slash container URLs 301 → slash form', () => {
+    it('redirects /foo/history (history_root, no slash) to /foo/history/', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history', { method: 'GET' })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: '' } })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe('/foo/history/')
+    })
+
+    it('redirects /foo/history/2024 (year, no slash) to /foo/history/2024/', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/2024', { method: 'GET' })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: '2024' } })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe('/foo/history/2024/')
+    })
+
+    it('redirects /foo/history/2024/03 (month, no slash) to /foo/history/2024/03/', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/2024/03', { method: 'GET' })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: '2024/03' } })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe('/foo/history/2024/03/')
+    })
+
+    it('redirects /foo/history/abc1234 (commit_folder, no slash) to /foo/history/abc1234/', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/abc1234', { method: 'GET' })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe('/foo/history/abc1234/')
+    })
+
+    it('redirects /topics/task_management/history/6789946 to the slash form (user case)', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request(
+        'https://flowcoop.eu/topics/task_management/history/6789946',
+        { method: 'GET' }
+      )
+      const res = await handler(
+        req,
+        makeContext({
+          params: { page: 'topics/task_management', rest: '6789946' }
+        })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe(
+        '/topics/task_management/history/6789946/'
+      )
+    })
+
+    it('redirects /foo/history/changelog (changelog_root, no slash) to /foo/history/changelog/', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/changelog', { method: 'GET' })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'changelog' } })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe('/foo/history/changelog/')
+    })
+
+    it('redirects /foo/history/changelog/2024 (changelog_year, no slash) to /foo/history/changelog/2024/', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/changelog/2024', { method: 'GET' })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'changelog/2024' } })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe('/foo/history/changelog/2024/')
+    })
+
+    it('does not call listCommitsForPath or listDirectoryFromGitHub before the redirect', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/abc1234', { method: 'GET' })
+      await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'abc1234' } })
+      )
+
+      expect(mockListCommitsForPath).not.toHaveBeenCalled()
+      expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+    })
+
+    it('returns a Location header that is the request pathname with a trailing slash', async () => {
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request(
+        'http://localhost/topics/task_management/history/abc1234',
+        { method: 'GET' }
+      )
+      const res = await handler(
+        req,
+        makeContext({
+          params: { page: 'topics/task_management', rest: 'abc1234' }
+        })
+      )
+
+      expect(res.status).toBe(301)
+      expect(res.headers.get('Location')).toBe(
+        '/topics/task_management/history/abc1234/'
+      )
+    })
+  })
+
+  describe('GET slash-form container URLs serve directly (no redirect)', () => {
+    it('serves /foo/history/2024/ (year with slash)', async () => {
+      mockListCommitsForPath.mockResolvedValueOnce([])
+
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/2024/', {
+        method: 'GET',
+        headers: { Accept: 'text/turtle' }
+      })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: '2024/' } })
+      )
+
+      expect(res.status).toBe(200)
+    })
+
+    it('serves /foo/history/2024/03/ (month with slash)', async () => {
+      mockListCommitsForPath.mockResolvedValueOnce([])
+
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/2024/03/', {
+        method: 'GET',
+        headers: { Accept: 'text/turtle' }
+      })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: '2024/03/' } })
+      )
+
+      expect(res.status).toBe(200)
+    })
+
+    it('serves /foo/history/abc1234/ (commit_folder with slash)', async () => {
+      mockListDirectoryFromGitHub.mockResolvedValueOnce({
+        status: 200,
+        entries: []
+      })
+
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/abc1234/', {
+        method: 'GET',
+        headers: { Accept: 'text/turtle' }
+      })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'abc1234/' } })
+      )
+
+      expect(res.status).toBe(200)
+      expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+        expect.objectContaining({ ref: 'abc1234', path: 'foo' })
+      )
+    })
+
+    it('serves /foo/history/changelog/ (changelog_root with slash)', async () => {
+      mockListCommitsForPath.mockResolvedValueOnce([])
+
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/changelog/', {
+        method: 'GET'
+      })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+      )
+
+      expect(res.status).toBe(200)
+    })
+  })
+
+  describe('GET resource URLs do NOT redirect', () => {
+    it('does not redirect /foo/history/abc1234/foo.txt (commit_file)', async () => {
+      mockFetchFileFromGitHub.mockResolvedValueOnce({
+        status: 200,
+        body: textBody('hi'),
+        contentType: 'text/plain; charset=utf-8',
+        etag: 'W/"abc"',
+        cacheControl: null
+      })
+
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/abc1234/foo.txt', {
+        method: 'GET'
+      })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'abc1234/foo.txt' } })
+      )
+
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Location')).toBeNull()
+    })
+
+    it('does not redirect /foo/history/changelog/2024/03 (changelog_month)', async () => {
+      mockListCommitsForPath.mockResolvedValueOnce([])
+      mockFetchFileFromGitHub.mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+
+      const { default: handler } = await import(
+        '../../netlify/functions/router/router.mts'
+      )
+      const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+        method: 'GET'
+      })
+      const res = await handler(
+        req,
+        makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+      )
+
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Location')).toBeNull()
+    })
   })
 })

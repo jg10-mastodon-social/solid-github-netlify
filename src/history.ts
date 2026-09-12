@@ -85,19 +85,35 @@ export function parseHistoryPath(rest: string): HistoryPath | null {
     return parseChangelogSegments(segments)
   }
 
-  for (const seg of segments) {
+  // Strip a single trailing empty segment so container URLs (year, month,
+  // commit_folder) accept the canonical trailing-slash form. A middle empty
+  // segment (e.g. "2024//03", "2024//") is still rejected by the
+  // UNSAFE_SEGMENTS check below as a security/path-safety guard.
+  const trimmed =
+    segments.length > 1 && segments[segments.length - 1] === ''
+      ? segments.slice(0, -1)
+      : segments
+
+  for (const seg of trimmed) {
     if (UNSAFE_SEGMENTS.has(seg)) return null
   }
 
-  if (segments.length === 1) {
-    return parseSingleSegment(segments[0]!)
+  let parsed: HistoryPath | null
+  if (trimmed.length === 1) {
+    parsed = parseSingleSegment(trimmed[0]!)
+  } else if (trimmed.length === 2) {
+    parsed = parseTwoSegments(trimmed[0]!, trimmed[1]!)
+  } else {
+    parsed = parseThreeOrMoreSegments(trimmed)
   }
 
-  if (segments.length === 2) {
-    return parseTwoSegments(segments[0]!, segments[1]!)
+  // Trailing-slash form is the canonical container form, but resources
+  // (commit_file) are explicitly NOT containers and reject it.
+  if (parsed !== null && parsed.kind === 'commit_file' && rest.endsWith('/')) {
+    return null
   }
 
-  return parseThreeOrMoreSegments(segments)
+  return parsed
 }
 
 function parseSingleSegment(seg: string): HistoryPath | null {

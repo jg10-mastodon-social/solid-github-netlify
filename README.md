@@ -281,14 +281,30 @@ The history tree under `/:page*/history/` is an LDP-navigable view of `${GITHUB_
 
 | URL | Response | Backing API calls |
 |---|---|---|
-| `GET /:page/history` | LDP `BasicContainer` listing years `[REPO_START_YEAR..currentYear]`, plus `<changelog/>` and `<draft/>` as siblings (both are always-listed virtual routes, not files) | **0** |
-| `GET /:page/history/YYYY` (in range) | LDP `BasicContainer` of `<MM>/` for months with commits | 1 (date-scoped `listCommitsForPath`) |
-| `GET /:page/history/YYYY` (out of range) | 404 | 0 |
-| `GET /:page/history/YYYY/MM` | LDP `BasicContainer` of `<shortSha>/` for commits in that month | 1 (date-scoped `listCommitsForPath`) |
-| `GET /:page/history/YYYY/MM/<shortSha>` | LDP `BasicContainer` listing immediate children of `<page>/` at that commit | 1 (`listDirectoryFromGitHub`, single-folder, no recursive subtree) |
-| `GET /:page/history/<shortSha>` | same as above (year/month prefix optional) | 1 |
+| `GET /:page/history/` | LDP `BasicContainer` listing years `[REPO_START_YEAR..currentYear]`, plus `<changelog/>` and `<draft/>` as siblings (both are always-listed virtual routes, not files) | **0** |
+| `GET /:page/history/YYYY/` (in range) | LDP `BasicContainer` of `<MM>/` for months with commits | 1 (date-scoped `listCommitsForPath`) |
+| `GET /:page/history/YYYY/` (out of range) | 404 | 0 |
+| `GET /:page/history/YYYY/MM/` | LDP `BasicContainer` of `<shortSha>/` for commits in that month | 1 (date-scoped `listCommitsForPath`) |
+| `GET /:page/history/YYYY/MM/<shortSha>/` | LDP `BasicContainer` listing immediate children of `<page>/` at that commit | 1 (`listDirectoryFromGitHub`, single-folder, no recursive subtree) |
+| `GET /:page/history/<shortSha>/` | same as above (year/month prefix optional) | 1 |
 | `GET /:page/history/<shortSha>/<doc*>` | file content at that commit | 1 (`fetchFileFromGitHub`) |
 | `GET /:page/history/YYYY/MM/<shortSha>/<doc*>` | same as above (year/month prefix ignored) | 1 |
+
+Container IRIs carry a trailing slash by convention (matches the Solid / LDP convention; CommunitySolidServer does the same). The no-slash form is always redirected to the slash form before any backing call:
+
+| Request | Response |
+|---|---|
+| `GET /:page/history` (no slash) | 301 `Location: /:page/history/` |
+| `GET /:page/history/YYYY` (no slash) | 301 `Location: /:page/history/YYYY/` |
+| `GET /:page/history/YYYY/MM` (no slash) | 301 `Location: /:page/history/YYYY/MM/` |
+| `GET /:page/history/<shortSha>` (no slash) | 301 `Location: /:page/history/<shortSha>/` |
+| `GET /:page/history/<shortSha>/<doc*>` | 200 (no redirect — file, not container) |
+| `GET /:page/history/changelog` (no slash) | 301 `Location: /:page/history/changelog/` |
+| `GET /:page/history/changelog/YYYY` (no slash) | 301 `Location: /:page/history/changelog/YYYY/` |
+| `GET /:page/history/changelog/YYYY/MM` | 200 (no redirect — month is a resource, not a container) |
+| `GET /:page/history/changelog/YYYY/MM/` | 404 (month rejects the trailing-slash form; the month is a resource) |
+
+The redirect fires before any GitHub API call, so a 301 is cheap (no upstream cost on a non-canonical request).
 
 Commit-folder containers (`<shortSha>/`) carry two extra triples in Turtle form for provenance:
 

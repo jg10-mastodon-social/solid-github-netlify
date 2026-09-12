@@ -26,7 +26,7 @@ import {
   type AsCollectionOptions,
   type Extras,
 } from "../../../src/ldp.js";
-import { parseHistoryPath, type HistoryPath } from "../../../src/history.js";
+import { parseHistoryPath, type HistoryPath, type HistoryPathKind } from "../../../src/history.js";
 import {
   listCommitsForPath,
   type Commit,
@@ -150,6 +150,30 @@ function isHistoryRequest(pathname: string, context: Context): boolean {
   return /^\/[^/]+\/history\/?$/.test(pathname);
 }
 
+function isContainerKind(kind: HistoryPathKind): boolean {
+  return (
+    kind === "history_root" ||
+    kind === "year" ||
+    kind === "month" ||
+    kind === "commit_folder" ||
+    kind === "changelog_root" ||
+    kind === "changelog_year"
+  );
+}
+
+function trailingSlashRedirect(
+  pathname: string,
+  corsHeaders: Record<string, string>,
+): Response {
+  return new Response(null, {
+    status: 301,
+    headers: {
+      ...corsHeaders,
+      Location: pathname + "/",
+    },
+  });
+}
+
 async function handleHistoryGet(
   req: Request,
   context: Context,
@@ -162,6 +186,10 @@ async function handleHistoryGet(
   const parsed = parseHistoryPath(rest);
   if (parsed === null) {
     return notFound(corsHeaders);
+  }
+
+  if (isContainerKind(parsed.kind) && !pathname.endsWith("/")) {
+    return trailingSlashRedirect(pathname, corsHeaders);
   }
 
   if (parsed.kind === "history_root") {
