@@ -1078,6 +1078,10 @@ describe('router WAC-Allow omitted on published GET', () => {
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain(
       'Netlify-CDN-Cache-Control'
     )
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Allow')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Put')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Patch')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Post')
   })
 })
 
@@ -1260,7 +1264,7 @@ describe('router draft GET advertises editing headers (CSS-aligned)', () => {
     expect(res.headers.get('Accept-Patch')).toBeNull()
   })
 
-  it('exposes Allow, Accept-Put, Accept-Patch via Access-Control-Expose-Headers on OPTIONS', async () => {
+  it('exposes Allow, Accept-Put, Accept-Patch, Accept-Post via Access-Control-Expose-Headers on OPTIONS', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/history/draft/data.ttl', { method: 'OPTIONS' })
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
@@ -1269,6 +1273,7 @@ describe('router draft GET advertises editing headers (CSS-aligned)', () => {
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Allow')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Put')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Patch')
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Post')
   })
 })
 
@@ -4652,6 +4657,18 @@ describe('router changelog root GET', () => {
     mockListCommitsForPath.mockReset()
     mockIsPathSafe.mockReset()
     mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -4792,6 +4809,248 @@ describe('router changelog root GET', () => {
     expect(body).toContain('<2023/>')
     expect(body).toContain('<2024/>')
     expect(body).not.toContain('<2022/>')
+  })
+})
+
+describe('router changelog root GET advertises writable resource headers', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function stubRootGet() {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+  }
+
+  it('emits Allow: GET, POST, OPTIONS', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Allow')).toBe('GET, POST, OPTIONS')
+  })
+
+  it('emits Accept-Post: text/turtle (POST handler expects text/turtle)', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Accept-Post')).toBe('text/turtle')
+  })
+
+  it('does not emit Accept-Put (changelog root is POST-only, not PUT-able)', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.headers.get('Accept-Put')).toBeNull()
+  })
+
+  it('does not emit Accept-Patch (changelog root is POST-only, not PATCH-able)', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.headers.get('Accept-Patch')).toBeNull()
+  })
+
+  it('emits Cache-Control: private, no-store and Netlify-CDN-Cache-Control: no-store', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('returns WAC-Allow: user="read write", public="read" for an authenticated allowlisted webid', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" for an anonymous request', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" when only Authorization is present (no DPoP)', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: true,
+      payload: {
+        webid: 'https://mallory.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" when verifyDpopToken returns a failure result', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 403,
+      message: 'WebID not allowed'
+    })
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('does not call verifyDpopToken when no auth headers are present', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(mockVerifyDpopToken).not.toHaveBeenCalled()
+  })
+
+  it('passes GET as the expected method to verifyDpopToken', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(mockVerifyDpopToken).toHaveBeenCalledWith(
+      'DPoP token',
+      'dpop-proof',
+      expect.any(String),
+      'GET',
+      ['https://alice.example/webid#me']
+    )
   })
 })
 
@@ -4936,6 +5195,18 @@ describe('router changelog month GET', () => {
     mockListCommitsForPath.mockReset()
     mockIsPathSafe.mockReset()
     mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -5215,6 +5486,277 @@ describe('router changelog month GET', () => {
     expect(body).toMatch(/as:items\s+<#abc1234>/)
     // Activity must NOT be addressed as a fragment of the page (/foo)
     expect(body).not.toContain('<http://localhost/foo#abc1234>')
+  })
+})
+
+describe('router changelog month GET advertises writable resource headers', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  function stubMonthGet() {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+  }
+
+  it('emits Allow: GET, PATCH, OPTIONS', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Allow')).toBe('GET, PATCH, OPTIONS')
+  })
+
+  it('emits Accept-Patch: text/n3', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Accept-Patch')).toBe('text/n3')
+  })
+
+  it('does not emit Accept-Put (changelog month is PATCH-only, not PUT-able)', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.headers.get('Accept-Put')).toBeNull()
+  })
+
+  it('does not emit Accept-Post (changelog month is PATCH-only, not POST-able)', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.headers.get('Accept-Post')).toBeNull()
+  })
+
+  it('emits Cache-Control: private, no-store and Netlify-CDN-Cache-Control: no-store', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('returns WAC-Allow: user="read write", public="read" for an authenticated allowlisted webid', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" for an anonymous request', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" when only Authorization is present (no DPoP)', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: true,
+      payload: {
+        webid: 'https://mallory.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('returns WAC-Allow: user="read", public="read" when verifyDpopToken returns a failure result', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 403,
+      message: 'WebID not allowed'
+    })
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('does not call verifyDpopToken when no auth headers are present', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(mockVerifyDpopToken).not.toHaveBeenCalled()
+  })
+
+  it('passes GET as the expected method to verifyDpopToken', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: {
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      }
+    })
+    await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(mockVerifyDpopToken).toHaveBeenCalledWith(
+      'DPoP token',
+      'dpop-proof',
+      expect.any(String),
+      'GET',
+      ['https://alice.example/webid#me']
+    )
+  })
+
+  it('omits WAC-Allow on 404 when year is out of range (short-circuit, no upstream call)', async () => {
+    const currentYear = new Date().getUTCFullYear()
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request(
+      `http://localhost/foo/history/changelog/${currentYear + 100}/03`,
+      { method: 'GET' }
+    )
+    const res = await handler(
+      req,
+      makeContext({
+        params: { page: 'foo', rest: `changelog/${currentYear + 100}/03` }
+      })
+    )
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
   })
 })
 

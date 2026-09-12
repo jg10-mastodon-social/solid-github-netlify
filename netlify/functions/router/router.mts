@@ -72,6 +72,24 @@ function applyDraftHeaders(
   headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
 }
 
+function applyChangelogHeaders(
+  headers: Record<string, string>,
+  ctx: {
+    authResult: AuthResponse | undefined;
+    writeWebIds: string[];
+    allow: string;
+    acceptPost?: string;
+    acceptPatch?: string;
+  },
+): void {
+  headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+  headers["Allow"] = ctx.allow;
+  if (ctx.acceptPost) headers["Accept-Post"] = ctx.acceptPost;
+  if (ctx.acceptPatch) headers["Accept-Patch"] = ctx.acceptPatch;
+  headers["Cache-Control"] = DRAFT_CACHE_CONTROL;
+  headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
+}
+
 function isShaMismatch(error: unknown): boolean {
   if (!(error instanceof GitHubApiError)) return false;
   if (error.status === 409) return true;
@@ -856,6 +874,20 @@ async function handleChangelogRootGet(
   page: string,
   corsHeaders: Record<string, string>,
 ): Promise<Response> {
+  let authResult: AuthResponse | undefined;
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+  if (authHeader && dpopHeader) {
+    const { writeWebIds } = loadWriteConfig();
+    authResult = await verifyDpopToken(
+      authHeader,
+      dpopHeader,
+      req.url,
+      "GET",
+      writeWebIds,
+    );
+  }
+
   const { githubRef } = loadGithubConfig();
   const commits = await listCommitsForPath({
     repo: pageRepo(page),
@@ -888,15 +920,19 @@ async function handleChangelogRootGet(
 
   const body = serializeContainer(containerUri, entries, as);
 
-  return new Response(body, {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "text/turtle; charset=utf-8",
-      "Cache-Control":
-        "public, max-age=86400, stale-while-revalidate=259200"
-    }
+  const { writeWebIds } = loadWriteConfig();
+  const headers: Record<string, string> = {
+    ...corsHeaders,
+    "Content-Type": "text/turtle; charset=utf-8"
+  };
+  applyChangelogHeaders(headers, {
+    authResult,
+    writeWebIds,
+    allow: "GET, POST, OPTIONS",
+    acceptPost: "text/turtle"
   });
+
+  return new Response(body, { status: 200, headers });
 }
 
 async function handleChangelogYearGet(
@@ -980,6 +1016,20 @@ async function handleChangelogMonthGet(
   const currentYear = new Date().getUTCFullYear();
   if (year < REPO_START_YEAR || year > currentYear || month < 1 || month > 12) {
     return notFound(corsHeaders);
+  }
+
+  let authResult: AuthResponse | undefined;
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+  if (authHeader && dpopHeader) {
+    const { writeWebIds } = loadWriteConfig();
+    authResult = await verifyDpopToken(
+      authHeader,
+      dpopHeader,
+      req.url,
+      "GET",
+      writeWebIds,
+    );
   }
 
   const monthPadded = String(month).padStart(2, "0");
@@ -1128,15 +1178,19 @@ async function handleChangelogMonthGet(
     writer.end((err, result) => (err ? reject(err) : resolve(result)));
   });
 
-  return new Response(body, {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "text/turtle; charset=utf-8",
-      "Cache-Control":
-        "public, max-age=86400, stale-while-revalidate=259200"
-    }
+  const { writeWebIds } = loadWriteConfig();
+  const headers: Record<string, string> = {
+    ...corsHeaders,
+    "Content-Type": "text/turtle; charset=utf-8"
+  };
+  applyChangelogHeaders(headers, {
+    authResult,
+    writeWebIds,
+    allow: "GET, PATCH, OPTIONS",
+    acceptPatch: "text/n3"
   });
+
+  return new Response(body, { status: 200, headers });
 }
 
 async function handleChangelogMonthPatch(
@@ -1860,7 +1914,7 @@ const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match",
   "Access-Control-Expose-Headers":
-    "ETag, Cache-Control, Netlify-CDN-Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch",
+    "ETag, Cache-Control, Netlify-CDN-Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch, Accept-Post",
   Vary: "Origin",
 });
 
