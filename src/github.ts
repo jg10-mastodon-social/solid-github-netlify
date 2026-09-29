@@ -612,6 +612,22 @@ export async function squashMergeBranch(
     throw error
   }
 
+  if (response.status === 204) {
+    const headSha = await getBranchRef({
+      repo: options.repo,
+      token: options.token,
+      branch: options.base
+    })
+    if (!headSha) {
+      throw new GitHubApiError(
+        `GitHub merge no-op but base ${options.base} not found`,
+        502
+      )
+    }
+    const htmlUrl = `https://github.com/${options.repo}/commit/${headSha}`
+    return { sha: headSha, htmlUrl, commitSha: headSha }
+  }
+
   const data = (await response.json()) as { sha?: string; html_url?: string }
   const sha = data.sha
   const htmlUrl = data.html_url

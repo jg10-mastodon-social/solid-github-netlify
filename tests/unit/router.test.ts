@@ -4506,13 +4506,21 @@ describe('router changelog POST handler', () => {
   })
 
   it('returns 200 with commit info on a successful publish (empty shard + payload)', async () => {
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
-      status: 404,
-      body: textBody(''),
-      contentType: null,
-      etag: null,
-      cacheControl: null
-    })
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
     mockListCommitsForPath.mockResolvedValueOnce([
       {
         sha: 'def5678901234abcd',
@@ -4589,13 +4597,21 @@ describe('router changelog POST handler', () => {
       content: 'sparql-prefix-stuff',
       appended: false
     })
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
-      status: 404,
-      body: textBody(''),
-      contentType: null,
-      etag: null,
-      cacheControl: null
-    })
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/history/changelog/', {
@@ -4647,6 +4663,87 @@ describe('router changelog POST handler', () => {
     const committed = mockCommitFileOnBranch.mock.calls[0]![0]
     expect(committed.content).toBe(Buffer.from('sparql-prefix-stuff', 'utf-8').toString('base64'))
     expect(committed.message).toBe('Initial save')
+  })
+
+  it('reads the existing shard from the draft branch first', async () => {
+    const draftContent = `<#current> <http://example.org/draft-only> "from-draft" .\n`
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(draftContent),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: 'W/"draft"',
+      cacheControl: null
+    })
+    mockAppendCurrentClientTriples.mockResolvedValueOnce({
+      content: draftContent,
+      appended: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <https://www.w3.org/ns/activitystreams#Create> ; <https://www.w3.org/ns/activitystreams#object> _:b1 .\n_:b1 <http://www.w3.org/2000/01/rdf-schema#label> "no payload" .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    expect(mockFetchFileFromGitHub.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ ref: 'foo-draft' })
+    )
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockSquashMergeBranch).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to HEAD when the draft branch does not have the shard', async () => {
+    const headContent = `<#current> <http://example.org/from-head> "from-head" .\n`
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: textBody(headContent),
+        contentType: 'text/turtle; charset=utf-8',
+        etag: 'W/"head"',
+        cacheControl: null
+      })
+    mockAppendCurrentClientTriples.mockResolvedValueOnce({
+      content: headContent,
+      appended: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '<#create> a <https://www.w3.org/ns/activitystreams#Create> ; <https://www.w3.org/ns/activitystreams#object> _:b1 .\n_:b1 <http://www.w3.org/2000/01/rdf-schema#label> "no payload" .'
+    })
+    const res = await handler(req, postContext())
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
+    expect(mockFetchFileFromGitHub.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ ref: 'foo-draft' })
+    )
+    expect(mockFetchFileFromGitHub.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ ref: 'HEAD' })
+    )
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(mockSquashMergeBranch).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -1446,19 +1446,34 @@ async function handleChangelogPost(
 
   let existing = "";
   try {
-    const cur = await fetchFileFromGitHub({
+    const curDraft = await fetchFileFromGitHub({
       repo: githubRepo,
       token: githubToken,
-      ref: githubRef,
+      ref: branch,
       path: shardPath,
     });
-    if (cur.status === 200) {
-      existing = new TextDecoder().decode(cur.body);
-    } else if (cur.status !== 404) {
-      return new Response(`Upstream returned ${cur.status}`, {
-        status: cur.status,
+    if (curDraft.status === 200) {
+      existing = new TextDecoder().decode(curDraft.body);
+    } else if (curDraft.status !== 404) {
+      return new Response(`Upstream returned ${curDraft.status}`, {
+        status: curDraft.status,
         headers: corsHeaders,
       });
+    } else {
+      const curHead = await fetchFileFromGitHub({
+        repo: githubRepo,
+        token: githubToken,
+        ref: githubRef,
+        path: shardPath,
+      });
+      if (curHead.status === 200) {
+        existing = new TextDecoder().decode(curHead.body);
+      } else if (curHead.status !== 404) {
+        return new Response(`Upstream returned ${curHead.status}`, {
+          status: curHead.status,
+          headers: corsHeaders,
+        });
+      }
     }
   } catch (error) {
     const message =
@@ -1467,27 +1482,6 @@ async function handleChangelogPost(
       status: 502,
       headers: corsHeaders,
     });
-  }
-
-  try {
-    const commits = await listCommitsForPath({
-      repo: githubRepo,
-      token: githubToken,
-      branch: githubRef,
-      path: page,
-      perPage: 1,
-    });
-    if (commits.length > 0) {
-      commits[0]!.sha.slice(0, 7);
-    }
-  } catch (error) {
-    if (
-      error instanceof GitHubApiError ||
-      error instanceof GitHubFetchError
-    ) {
-      throw error;
-    }
-    throw error;
   }
 
   const { content, appended } = await appendCurrentClientTriples({

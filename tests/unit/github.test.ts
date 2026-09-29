@@ -1559,6 +1559,56 @@ describe('squashMergeBranch', () => {
       expect((error as GitHubFetchError).status).toBe(502)
     }
   })
+
+  it('returns base HEAD sha and synthesized htmlUrl on 204 No Content (no-op merge)', async () => {
+    const fetchMock = mockFetchSequence([
+      new Response(null, { status: 204 }),
+      jsonResponse({ object: { sha: 'base-sha-1234567' } })
+    ])
+
+    const result = await squashMergeBranch({
+      repo: 'octocat/hello-world',
+      token: 'ghp_test',
+      base: 'main',
+      head: 'foo-draft',
+      commitMessage: 'no-op'
+    })
+
+    expect(result).toEqual({
+      sha: 'base-sha-1234567',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/base-sha-1234567',
+      commitSha: 'base-sha-1234567'
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://api.github.com/repos/octocat/hello-world/merges'
+    )
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'https://api.github.com/repos/octocat/hello-world/git/ref/heads/main'
+    )
+  })
+
+  it('throws GitHubApiError with status 502 when 204 returned but base branch not found', async () => {
+    mockFetchSequence([
+      new Response(null, { status: 204 }),
+      new Response('Not Found', { status: 404 })
+    ])
+
+    try {
+      await squashMergeBranch({
+        repo: 'octocat/hello-world',
+        token: 'ghp_test',
+        base: 'main',
+        head: 'foo-draft',
+        commitMessage: 'no-op'
+      })
+      throw new Error('expected squashMergeBranch to throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(GitHubApiError)
+      expect((error as GitHubApiError).status).toBe(502)
+    }
+  })
 })
 
 describe('deleteBranch', () => {
