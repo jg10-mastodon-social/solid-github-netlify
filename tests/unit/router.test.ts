@@ -1019,6 +1019,54 @@ describe('router WAC-Allow on draft GET', () => {
     expect(res.status).toBe(502)
     expect(res.headers.get('WAC-Allow')).toBeNull()
   })
+
+  it('emits Vary: Origin, Authorization, DPoP on the draft GET response (anonymous)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    const vary = res.headers.get('Vary') ?? ''
+    expect(vary).toContain('Origin')
+    expect(vary).toContain('Authorization')
+    expect(vary).toContain('DPoP')
+  })
+
+  it('emits Vary: Origin, Authorization, DPoP on the draft GET response (authenticated)', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    const vary = res.headers.get('Vary') ?? ''
+    expect(vary).toContain('Origin')
+    expect(vary).toContain('Authorization')
+    expect(vary).toContain('DPoP')
+  })
+
+  it('preserves Vary: If-None-Match alongside Authorization, DPoP when the client sent If-None-Match', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: { 'If-None-Match': '"abc"' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    const vary = res.headers.get('Vary') ?? ''
+    expect(vary).toContain('If-None-Match')
+    expect(vary).toContain('Authorization')
+    expect(vary).toContain('DPoP')
+  })
 })
 
 describe('router WAC-Allow omitted on published GET', () => {
@@ -5149,6 +5197,23 @@ describe('router changelog root GET advertises writable resource headers', () =>
       ['https://alice.example/webid#me']
     )
   })
+
+  it('emits Vary: Origin, Authorization, DPoP on the changelog root GET response', async () => {
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    const vary = res.headers.get('Vary') ?? ''
+    expect(vary).toContain('Origin')
+    expect(vary).toContain('Authorization')
+    expect(vary).toContain('DPoP')
+  })
 })
 
 describe('router changelog year GET', () => {
@@ -5317,7 +5382,7 @@ describe('router changelog month GET', () => {
 
   it('returns 200 with Content-Type text/turtle; charset=utf-8 on success', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
+    mockFetchFileFromGitHub.mockResolvedValue({
       status: 404,
       body: textBody(''),
       contentType: null,
@@ -5378,7 +5443,7 @@ describe('router changelog month GET', () => {
         htmlUrl: 'https://example/commit/abc1234567890'
       }
     ] as any)
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
+    mockFetchFileFromGitHub.mockResolvedValue({
       status: 404,
       body: textBody(''),
       contentType: null,
@@ -5442,7 +5507,7 @@ describe('router changelog month GET', () => {
 
   it('treats a missing shard (404) as no client triples and still emits the envelope', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
+    mockFetchFileFromGitHub.mockResolvedValue({
       status: 404,
       body: textBody(''),
       contentType: null,
@@ -5467,13 +5532,21 @@ describe('router changelog month GET', () => {
 
   it('fetches the shard from the per-month path on the githubRef branch', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
-      status: 404,
-      body: textBody(''),
-      contentType: null,
-      etag: null,
-      cacheControl: null
-    })
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/history/changelog/2024/03', {
@@ -5484,15 +5557,19 @@ describe('router changelog month GET', () => {
       makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
     )
 
-    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
     const args = mockFetchFileFromGitHub.mock.calls[0][0]
     expect(args.path).toBe('foo/.changelog/2024/03.ttl')
-    expect(args.ref).toBe('HEAD')
+    expect(args.ref).toBe('foo-draft')
+    const fallbackArgs = mockFetchFileFromGitHub.mock.calls[1][0]
+    expect(fallbackArgs.path).toBe('foo/.changelog/2024/03.ttl')
+    expect(fallbackArgs.ref).toBe('HEAD')
+    expect(fallbackArgs.logTag).toBe('fallback')
   })
 
   it('calls listCommitsForPath with since/until scoped to the month', async () => {
     mockListCommitsForPath.mockResolvedValueOnce([])
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
+    mockFetchFileFromGitHub.mockResolvedValue({
       status: 404,
       body: textBody(''),
       contentType: null,
@@ -5558,7 +5635,7 @@ describe('router changelog month GET', () => {
         htmlUrl: 'https://example/commit/abc1234567890'
       }
     ] as any)
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
+    mockFetchFileFromGitHub.mockResolvedValue({
       status: 404,
       body: textBody(''),
       contentType: null,
@@ -5583,6 +5660,202 @@ describe('router changelog month GET', () => {
     expect(body).toMatch(/as:items\s+<#abc1234>/)
     // Activity must NOT be addressed as a fragment of the page (/foo)
     expect(body).not.toContain('<http://localhost/foo#abc1234>')
+  })
+
+  it('uses the draft shard when present and does not call the main branch', async () => {
+    const draftContent = `<#current> <http://example.org/draft-only> "from-draft" .\n`
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(draftContent),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(1)
+    expect(mockFetchFileFromGitHub.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ ref: 'foo-draft' })
+    )
+    const body = await res.text()
+    expect(body).toContain('from-draft')
+  })
+
+  it('falls back to the main branch shard when the draft branch returns 404', async () => {
+    const mainContent = `<#current> <http://example.org/main-only> "from-main" .\n`
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: textBody(mainContent),
+        contentType: 'text/turtle; charset=utf-8',
+        etag: null,
+        cacheControl: null
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledTimes(2)
+    const body = await res.text()
+    expect(body).toContain('from-main')
+  })
+
+  it('anonymous reader (no auth headers) sees the merged view with draft triples and user="read" WAC-Allow', async () => {
+    const draftContent = `<#current> <http://example.org/draft-only> "from-draft" .\n`
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(draftContent),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(mockVerifyDpopToken).not.toHaveBeenCalled()
+    const body = await res.text()
+    expect(body).toContain('from-draft')
+  })
+
+  it('rewrites <#current> to <#<latestShortSha>> when reading from the draft branch', async () => {
+    const draftContent = `<#current> <http://example.org/custom> "pending edit" .\n`
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(draftContent),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<#abc1234>')
+    expect(body).toContain('pending edit')
+    expect(body).toContain('<http://example.org/custom>')
+    expect(body).not.toContain('<#current>')
+  })
+
+  it('canonical-view: returns byte-identical body for anonymous and authenticated requests against the same state', async () => {
+    const draftContent = `<#current> <http://example.org/draft-only> "from-draft" .\n`
+    mockListCommitsForPath.mockReset()
+    mockListCommitsForPath.mockResolvedValue([
+      {
+        sha: 'abc1234567890',
+        message: 'Initial save',
+        authorName: 'A',
+        authorEmail: 'a@x',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://example/commit/abc1234567890'
+      }
+    ] as any)
+    mockFetchFileFromGitHub.mockReset()
+    mockFetchFileFromGitHub.mockResolvedValue({
+      status: 200,
+      body: textBody(draftContent),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const ctx = makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    const anonReq = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET'
+    })
+    const authReq = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+
+    const anonRes = await handler(anonReq, ctx)
+    const authRes = await handler(authReq, ctx)
+
+    expect(anonRes.status).toBe(200)
+    expect(authRes.status).toBe(200)
+    expect(await anonRes.text()).toBe(await authRes.text())
+    expect(anonRes.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(authRes.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
   })
 })
 
@@ -5617,7 +5890,7 @@ describe('router changelog month GET advertises writable resource headers', () =
 
   function stubMonthGet() {
     mockListCommitsForPath.mockResolvedValueOnce([])
-    mockFetchFileFromGitHub.mockResolvedValueOnce({
+    mockFetchFileFromGitHub.mockResolvedValue({
       status: 404,
       body: textBody(''),
       contentType: null,
@@ -5854,6 +6127,95 @@ describe('router changelog month GET advertises writable resource headers', () =
 
     expect(res.status).toBe(404)
     expect(res.headers.get('WAC-Allow')).toBeNull()
+  })
+
+  it('preserves Cache-Control: private, no-store and Netlify-CDN-Cache-Control: no-store when merged view uses draft content (no fallback)', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`<#current> <http://example.org/x> "v" .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('preserves Cache-Control: private, no-store and Netlify-CDN-Cache-Control: no-store when merged view falls back to main', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub
+      .mockResolvedValueOnce({
+        status: 404,
+        body: textBody(''),
+        contentType: null,
+        etag: null,
+        cacheControl: null
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: textBody(`<#current> <http://example.org/x> "v" .\n`),
+        contentType: 'text/turtle; charset=utf-8',
+        etag: null,
+        cacheControl: null
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('emits Vary: Origin, Authorization, DPoP on the changelog month GET response', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    const vary = res.headers.get('Vary') ?? ''
+    expect(vary).toContain('Origin')
+    expect(vary).toContain('Authorization')
+    expect(vary).toContain('DPoP')
+  })
+
+  it('does not include Vary: If-None-Match on the changelog month GET (no upstream ETag is forwarded)', async () => {
+    stubMonthGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'GET',
+      headers: { 'If-None-Match': '"abc"' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    const vary = res.headers.get('Vary') ?? ''
+    expect(vary).not.toContain('If-None-Match')
+    expect(vary).toContain('Authorization')
+    expect(vary).toContain('DPoP')
   })
 })
 
@@ -6125,7 +6487,7 @@ describe('router trailing-slash redirect for history containers', () => {
 
     it('does not redirect /foo/history/changelog/2024/03 (changelog_month)', async () => {
       mockListCommitsForPath.mockResolvedValueOnce([])
-      mockFetchFileFromGitHub.mockResolvedValueOnce({
+      mockFetchFileFromGitHub.mockResolvedValue({
         status: 404,
         body: textBody(''),
         contentType: null,

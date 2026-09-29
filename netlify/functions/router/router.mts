@@ -70,6 +70,8 @@ function applyDraftHeaders(
   headers["Accept-Patch"] = "text/n3";
   headers["Cache-Control"] = DRAFT_CACHE_CONTROL;
   headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
+  headers["Vary"] = appendVary(headers["Vary"], "Authorization");
+  headers["Vary"] = appendVary(headers["Vary"], "DPoP");
 }
 
 function applyChangelogHeaders(
@@ -88,6 +90,8 @@ function applyChangelogHeaders(
   if (ctx.acceptPatch) headers["Accept-Patch"] = ctx.acceptPatch;
   headers["Cache-Control"] = DRAFT_CACHE_CONTROL;
   headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
+  headers["Vary"] = appendVary(headers["Vary"], "Authorization");
+  headers["Vary"] = appendVary(headers["Vary"], "DPoP");
 }
 
 function isShaMismatch(error: unknown): boolean {
@@ -1036,22 +1040,39 @@ async function handleChangelogMonthGet(
   const lastDay = lastDayOfMonth(year, month);
   const { githubRepo, githubToken: token, githubRef } = loadGithubConfig();
   const shardPath = `${page}/.changelog/${year}/${monthPadded}.ttl`;
+  const draftBranch = page ? `${page}-draft` : "draft";
 
   let shardText = "";
   try {
-    const cur = await fetchFileFromGitHub({
+    const curDraft = await fetchFileFromGitHub({
       repo: githubRepo,
       token,
-      ref: githubRef,
-      path: shardPath
+      ref: draftBranch,
+      path: shardPath,
     });
-    if (cur.status === 200) {
-      shardText = new TextDecoder().decode(cur.body);
-    } else if (cur.status !== 404) {
-      return new Response(`Upstream returned ${cur.status}`, {
-        status: cur.status,
-        headers: corsHeaders
+    if (curDraft.status === 200) {
+      shardText = new TextDecoder().decode(curDraft.body);
+    } else if (curDraft.status !== 404) {
+      return new Response(`Upstream returned ${curDraft.status}`, {
+        status: curDraft.status,
+        headers: corsHeaders,
       });
+    } else {
+      const curHead = await fetchFileFromGitHub({
+        repo: githubRepo,
+        token,
+        ref: githubRef,
+        path: shardPath,
+        logTag: "fallback",
+      });
+      if (curHead.status === 200) {
+        shardText = new TextDecoder().decode(curHead.body);
+      } else if (curHead.status !== 404) {
+        return new Response(`Upstream returned ${curHead.status}`, {
+          status: curHead.status,
+          headers: corsHeaders,
+        });
+      }
     }
   } catch (error) {
     const message =
