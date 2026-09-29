@@ -30,9 +30,10 @@ describe('router function via netlify dev', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, POST, OPTIONS')
     expect(res.headers.get('Access-Control-Allow-Headers')).toBe(
-      'Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match'
+      'Authorization, DPoP, Content-Type, Accept, Accept-Charset, Accept-Datetime, Cache-Control, Date, Digest, If-Match, If-None-Match, Link, Prefer, Range, Signature, Slug, Want-Digest'
     )
   })
 
@@ -42,7 +43,7 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, POST, OPTIONS')
   })
 
   it('returns 204 for OPTIONS on a 3-segment path', async () => {
@@ -55,7 +56,7 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, POST, OPTIONS')
   })
 
   it('invokes the function for GET on a 3-segment path', async () => {
@@ -114,7 +115,8 @@ describe('router function via netlify dev', () => {
     })
 
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
-    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, OPTIONS')
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBe('PATCH, PUT, GET, POST, OPTIONS')
     expect(res.headers.get('Vary')).toBe('Origin')
   })
 

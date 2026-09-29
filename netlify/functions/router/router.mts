@@ -1925,9 +1925,10 @@ function buildDirectoryIndexResponse(
 
 const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Origin": origin ?? "*",
+  "Access-Control-Allow-Credentials": "true",
   "Access-Control-Allow-Methods": "PATCH, PUT, GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match",
+    "Authorization, DPoP, Content-Type, Accept, Accept-Charset, Accept-Datetime, Cache-Control, Date, Digest, If-Match, If-None-Match, Link, Prefer, Range, Signature, Slug, Want-Digest",
   "Access-Control-Expose-Headers":
     "ETag, Cache-Control, Netlify-CDN-Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch, Accept-Post",
   Vary: "Origin",

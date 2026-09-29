@@ -1122,6 +1122,7 @@ describe('router WAC-Allow omitted on published GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('WAC-Allow')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain(
       'Netlify-CDN-Cache-Control'
@@ -1130,6 +1131,10 @@ describe('router WAC-Allow omitted on published GET', () => {
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Put')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Patch')
     expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Accept-Post')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Link')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Prefer')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Slug')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Want-Digest')
   })
 })
 
@@ -2309,6 +2314,132 @@ describe('router CORS preflight advertises If-Match', () => {
 
     expect(res.status).toBe(204)
     expect(res.headers.get('Access-Control-Allow-Headers')).toContain('If-Match')
+  })
+})
+
+describe('router CORS preflight is Solid-spec compliant', () => {
+  async function preflight(
+    origin: string | null,
+    method: string,
+    requestedHeaders: string
+  ): Promise<Response> {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const headers: Record<string, string> = {
+      'Access-Control-Request-Method': method,
+      'Access-Control-Request-Headers': requestedHeaders
+    }
+    if (origin !== null) headers.Origin = origin
+    const req = new Request('http://localhost/foo/bar', {
+      method: 'OPTIONS',
+      headers
+    })
+    return handler(req, makeContext())
+  }
+
+  async function preflightWithOriginHeader(
+    originHeaderValue: string | undefined,
+    method: string,
+    requestedHeaders: string
+  ): Promise<Response> {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const headers: Record<string, string> = {
+      'Access-Control-Request-Method': method,
+      'Access-Control-Request-Headers': requestedHeaders
+    }
+    if (originHeaderValue !== undefined) headers.Origin = originHeaderValue
+    const req = new Request('http://localhost/foo/bar', {
+      method: 'OPTIONS',
+      headers
+    })
+    return handler(req, makeContext())
+  }
+
+  it('sets Access-Control-Allow-Credentials: true on credentialed preflights', async () => {
+    const res = await preflight(
+      'https://pod.josephguillaume.id.au',
+      'PATCH',
+      'authorization,content-type,dpop,if-match'
+    )
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+  })
+
+  it('echoes the request Origin as Access-Control-Allow-Origin', async () => {
+    const res = await preflight(
+      'https://pod.josephguillaume.id.au',
+      'PATCH',
+      'authorization,content-type,dpop,if-match'
+    )
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(
+      'https://pod.josephguillaume.id.au'
+    )
+    expect(res.headers.get('Vary')).toContain('Origin')
+  })
+
+  it('echoes Origin: null as the literal string "null" (sandboxed iframes, file://, data:)', async () => {
+    const res = await preflightWithOriginHeader('null', 'PATCH', 'authorization,content-type,dpop,if-match')
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('null')
+  })
+
+  it('falls back to * when no Origin header is sent (non-browser client)', async () => {
+    const res = await preflightWithOriginHeader(undefined, 'PUT', 'authorization,content-type,dpop,if-match')
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+  })
+
+  it('advertises the full Solid-protocol Access-Control-Allow-Headers allow-list', async () => {
+    const res = await preflight(
+      'https://example.com',
+      'PUT',
+      'link,prefer,slug,want-digest'
+    )
+
+    const allowHeaders = res.headers.get('Access-Control-Allow-Headers') ?? ''
+    expect(allowHeaders).toContain('Authorization')
+    expect(allowHeaders).toContain('DPoP')
+    expect(allowHeaders).toContain('Content-Type')
+    expect(allowHeaders).toContain('Accept')
+    expect(allowHeaders).toContain('Accept-Charset')
+    expect(allowHeaders).toContain('Accept-Datetime')
+    expect(allowHeaders).toContain('Cache-Control')
+    expect(allowHeaders).toContain('Date')
+    expect(allowHeaders).toContain('Digest')
+    expect(allowHeaders).toContain('If-Match')
+    expect(allowHeaders).toContain('If-None-Match')
+    expect(allowHeaders).toContain('Link')
+    expect(allowHeaders).toContain('Prefer')
+    expect(allowHeaders).toContain('Range')
+    expect(allowHeaders).toContain('Signature')
+    expect(allowHeaders).toContain('Slug')
+    expect(allowHeaders).toContain('Want-Digest')
+  })
+
+  it('advertises Access-Control-Allow-Credentials on OPTIONS regardless of path', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/topics/task_management/history/changelog/2026/09', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://pod.josephguillaume.id.au',
+        'Access-Control-Request-Method': 'PATCH',
+        'Access-Control-Request-Headers': 'authorization,content-type,dpop,if-match,link'
+      }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'topics/task_management', rest: 'changelog/2026/09' } })
+    )
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(
+      'https://pod.josephguillaume.id.au'
+    )
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Link')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Prefer')
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Slug')
   })
 })
 

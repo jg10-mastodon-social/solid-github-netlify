@@ -31,7 +31,7 @@ Solid-protocol-compatible read/write proxy backed by a GitHub repository. Public
 - **Changelog month GET** `GET /:page*/history/changelog/YYYY/MM` — unauthenticated. The synthesized activities for that month, inline as an `as:OrderedCollectionPage` with `as:prev`/`as:next` to sibling months. **Reads the shard from `${page}-draft` first** (so any pending month-PATCH edits on the draft branch are visible); falls back to `GITHUB_REF` on 404. The response body is canonical — identical for every reader regardless of authentication; only `WAC-Allow` varies per request.
 - **Changelog month PATCH** `PATCH /:page*/history/changelog/YYYY/MM` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Buffers an edit to the past-month shard on `${page}-draft`. Same `text/n3` patch constraints as the draft PATCH.
 - **Changelog POST** `POST /:page*/history/changelog/` — Solid-OIDC-authenticated against `WRITE_WEBIDS`. Publishes a new activity: blank-node `prov:Activity` in Turtle with `rdfs:label` as the commit message (required). One main commit per POST; the draft branch is squash-merged in and deleted.
-- **CORS** `OPTIONS` — 204 with allow-list `POST, PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Date, Digest, Signature, If-None-Match, If-Match`; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch`; echoes `Origin` (falls back to `*`); `Vary: Origin`. Draft and changelog GETs additionally advertise `Vary: Authorization, DPoP` so caches don't collapse the `WAC-Allow` variants across authenticated/anonymous callers.
+- **CORS** `OPTIONS` — 204 with allow-list `POST, PATCH, PUT, GET, OPTIONS`; allows headers `Authorization, DPoP, Content-Type, Accept, Accept-Charset, Accept-Datetime, Cache-Control, Date, Digest, If-Match, If-None-Match, Link, Prefer, Range, Signature, Slug, Want-Digest` (full Solid-protocol set); `Access-Control-Allow-Credentials: true` so credentialed writes succeed; exposes `ETag, Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch, Accept-Post`; echoes `Origin` (falls back to `*` when no Origin header is sent); `Vary: Origin`. Draft and changelog GETs additionally advertise `Vary: Authorization, DPoP` so caches don't collapse the `WAC-Allow` variants across authenticated/anonymous callers.
 
 **Path safety** — every path goes through `isPathSafe` (no leading `/`, no empty/`./`..`/NUL segments); unsafe paths are rejected with 400. The empty path (root container `/`) is the only exception.
 
@@ -327,7 +327,7 @@ The commit SHA in the URL is the source of truth. Year and month segments in the
 
 ### OPTIONS
 
-204 with CORS allow-list as documented above. No auth, no upstream call.
+204 with CORS allow-list as documented above (including `Access-Control-Allow-Credentials: true`). No auth, no upstream call.
 
 ## Testing
 
