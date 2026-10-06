@@ -487,7 +487,7 @@ async function serveCommitFolder(
   }
 
   const origin = new URL(req.url).origin;
-  const pageUrl = `${origin}/${page}`;
+  const pageUrl = page ? `${origin}/${page}` : origin;
   const extras: Extras = {
     "http://mementoweb.org/ns#original": `${pageUrl}/`
   };
@@ -1693,7 +1693,7 @@ async function handleGet(
       draft,
       authResult,
       writeWebIds,
-      isPageRoot: !draft && path !== "",
+      isPageRoot: !draft,
     });
   }
 
@@ -1822,7 +1822,7 @@ async function buildPageRootExtras(options: {
   const year = d.getUTCFullYear();
   const month = String(d.getUTCMonth() + 1).padStart(2, "0");
   const origin = new URL(options.req.url).origin;
-  const pageUrl = `${origin}/${options.path}`;
+  const pageUrl = options.path ? `${origin}/${options.path}` : origin;
 
   return {
     "http://mementoweb.org/ns#memento":

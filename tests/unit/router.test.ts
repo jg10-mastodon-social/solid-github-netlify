@@ -3133,7 +3133,44 @@ describe('router GET container listing', () => {
     expect(mockListCommitsForPath).not.toHaveBeenCalled()
   })
 
-  it('GET / (repo root) does not emit the provenance/memento triples', async () => {
+  it('GET / (repo root) emits the provenance/memento triples with single-slash URLs when the root has a commit', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'foo', path: 'foo', type: 'dir', sha: 'sha-f' }]
+    })
+    mockListCommitsForPath.mockResolvedValueOnce([
+      {
+        sha: 'abcdef1234567890abcdef1234567890abcdef12',
+        message: 'msg',
+        authorName: 'a',
+        authorEmail: 'a@b',
+        date: '2024-03-15T10:00:00Z',
+        htmlUrl: 'https://github.com/...'
+      }
+    ])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(
+      /<http:\/\/mementoweb\.org\/ns#memento>\s+<http:\/\/localhost\/history\/abcdef1\/>/
+    )
+    expect(body).toMatch(
+      /<http:\/\/www\.w3\.org\/2002\/07\/owl#sameAs>\s+<http:\/\/localhost\/history\/abcdef1\/>/
+    )
+    expect(body).toMatch(
+      /<http:\/\/www\.w3\.org\/ns\/prov#wasGeneratedBy>\s+<http:\/\/localhost\/history\/changelog\/2024\/03#abcdef1>/
+    )
+    expect(body).not.toContain('localhost//')
+    expect(mockListCommitsForPath).toHaveBeenCalledWith(
+      expect.objectContaining({ perPage: 1, branch: 'HEAD', path: '' })
+    )
+  })
+
+  it('GET / (repo root) omits the provenance/memento triples when the root has no commits', async () => {
     mockListDirectoryFromGitHub.mockResolvedValueOnce({
       status: 200,
       entries: [{ name: 'foo', path: 'foo', type: 'dir', sha: 'sha-f' }]
@@ -3148,7 +3185,7 @@ describe('router GET container listing', () => {
     expect(body).not.toContain('mementoweb.org/ns#memento')
     expect(body).not.toContain('owl#sameAs')
     expect(body).not.toContain('prov#wasGeneratedBy')
-    expect(mockListCommitsForPath).not.toHaveBeenCalled()
+    expect(body).toMatch(/<>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
   })
 
   it('serves GET /history/draft/ as the root container on the literal "draft" branch (regression: empty page splat)', async () => {
@@ -4073,6 +4110,45 @@ describe('router commit folder', () => {
     expect(body).toMatch(
       /<http:\/\/mementoweb\.org\/ns#original>\s+<http:\/\/localhost\/foo\/>\s*[.;]/
     )
+  })
+
+  it('emits memento:original pointing at the repo root without a double slash for a root commit folder', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.html', path: 'index.html', type: 'file', sha: 'sha-1' }
+      ]
+    })
+    mockGetCommit.mockResolvedValueOnce({
+      sha: 'abcdef1234567890abcdef1234567890abcdef12',
+      message: 'msg',
+      authorName: 'a',
+      authorEmail: 'a@b',
+      date: '2024-03-15T10:00:00Z',
+      htmlUrl: 'https://github.com/...'
+    })
+
+    const { default: handler } = await import(
+      '../../netlify/functions/router/router.mts'
+    )
+    const req = new Request('http://localhost/history/abc1234/', {
+      method: 'GET',
+      headers: { Accept: 'text/turtle' }
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: '', rest: 'abc1234/' } })
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toMatch(
+      /<http:\/\/mementoweb\.org\/ns#original>\s+<http:\/\/localhost\/>\s*[.;]/
+    )
+    expect(body).toMatch(
+      /<http:\/\/www\.w3\.org\/ns\/prov#wasGeneratedBy>\s+<http:\/\/localhost\/history\/changelog\/2024\/03#abc1234>/
+    )
+    expect(body).not.toContain('localhost//')
   })
 
   it('omits prov:wasGeneratedBy but keeps memento:original when getCommit returns null', async () => {
