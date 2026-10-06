@@ -24,7 +24,7 @@ function bytes(s: string): Uint8Array {
 async function apply(
   body: string,
   existing: string | null,
-): Promise<{ content: string; contentType: string }> {
+): Promise<{ content: string; contentType: string; changed: boolean }> {
   return applyInsertDeleteTurtlePatch({
     body: bytes(body),
     existing: existing === null ? null : bytes(existing),
@@ -94,6 +94,54 @@ describe('applyInsertDeleteTurtlePatch — success cases', () => {
     // so we just assert the output structure here — no throw from serialize side-effects)
     expect(result.content.length).toBeGreaterThan(0)
     expect(result.content.endsWith('\n')).toBe(true)
+  })
+})
+
+describe('applyInsertDeleteTurtlePatch — changed flag', () => {
+  it('reports changed=true when a new triple is inserted', async () => {
+    const existing = `${PREFIXES}ex:alice ex:knows ex:carol .\n`
+    const result = await apply(patch('ex:alice ex:knows ex:bob .'), existing)
+    expect(result.changed).toBe(true)
+  })
+
+  it('reports changed=true for an insert into a missing document', async () => {
+    const result = await apply(patch('ex:alice ex:knows ex:bob .'), null)
+    expect(result.changed).toBe(true)
+  })
+
+  it('reports changed=true for an insert into an empty document', async () => {
+    const result = await apply(patch('ex:alice ex:knows ex:bob .'), '')
+    expect(result.changed).toBe(true)
+  })
+
+  it('reports changed=false when inserting a triple that is already present', async () => {
+    const existing = `${PREFIXES}ex:alice ex:knows ex:bob .\n`
+    const result = await apply(patch('ex:alice ex:knows ex:bob .'), existing)
+    expect(result.changed).toBe(false)
+  })
+
+  it('reports changed=false when a delete and an insert cancel out', async () => {
+    const existing = `${PREFIXES}ex:alice ex:knows ex:bob .\n`
+    const result = await apply(
+      patch('ex:alice ex:knows ex:bob .', { deletes: 'ex:alice ex:knows ex:bob' }),
+      existing,
+    )
+    expect(result.changed).toBe(false)
+  })
+
+  it('reports changed=true when a delete removes a triple', async () => {
+    const existing = `${PREFIXES}ex:alice ex:knows ex:carol .\nex:alice ex:knows ex:bob .\n`
+    const result = await apply(
+      patch('', { deletes: 'ex:alice ex:knows ex:carol' }),
+      existing,
+    )
+    expect(result.changed).toBe(true)
+  })
+
+  it('reports changed=false for a no-op patch that introduces only a new prefix', async () => {
+    const existing = '@prefix ex: <http://www.example.org/terms#>.\nex:alice ex:knows ex:bob .\n'
+    const result = await apply(patch('ex:alice ex:knows ex:bob .'), existing)
+    expect(result.changed).toBe(false)
   })
 })
 

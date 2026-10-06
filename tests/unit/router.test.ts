@@ -1573,6 +1573,120 @@ ex:alice ex:knows ex:bob .
     expect(decoded).not.toMatch(/ex:bob/)
   })
 
+  it('does not commit when the patch leaves the graph unchanged', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:bob .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: '"existing-blob"',
+      cacheControl: null
+    })
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .')
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(res.headers.get('ETag')).toBe('"existing-blob"')
+    const body = await res.json()
+    expect(body.changed).toBe(false)
+    expect(body.etag).toBe('existing-blob')
+    expect(body.branch).toBe('foo-draft')
+    expect(body.path).toBe('foo/data.ttl')
+  })
+
+  it('does not commit when a delete and insert cancel out', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:bob .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: '"existing-blob"',
+      cacheControl: null
+    })
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .', {
+        deletes: 'ex:alice ex:knows ex:bob'
+      })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('returns 412 when If-Match does not match on a no-op patch', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:bob .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: '"existing-blob"',
+      cacheControl: null
+    })
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"stale"'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .')
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(412)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
+  it('accepts a matching If-Match on a no-op patch', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:bob .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: '"existing-blob"',
+      cacheControl: null
+    })
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"existing-blob"'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .')
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+  })
+
   it('returns 409 when a delete triple is not present in the existing file', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
@@ -2175,6 +2289,70 @@ describe('router changelog month PATCH handler', () => {
     expect(decoded).toContain('ex:eve')
     expect(decoded).toContain('ex:alice')
     expect(decoded).toContain('ex:carol')
+  })
+
+  it('does not commit when the month patch leaves the graph unchanged', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: '"existing-blob"',
+      cacheControl: null
+    })
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:knows ex:carol .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
+    expect(res.headers.get('ETag')).toBe('"existing-blob"')
+    const body = await res.json()
+    expect(body.changed).toBe(false)
+    expect(body.etag).toBe('existing-blob')
+    expect(body.path).toBe('foo/.changelog/2024/03.ttl')
+  })
+
+  it('returns 412 when If-Match does not match on a no-op month patch', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: '"existing-blob"',
+      cacheControl: null
+    })
+    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob')
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop',
+        'If-Match': 'W/"stale"'
+      },
+      body: patchBody('ex:alice ex:knows ex:carol .')
+    })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(412)
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 
   it('returns 200 with commit info when creating a new shard from a missing file', async () => {

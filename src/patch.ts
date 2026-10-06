@@ -1,5 +1,5 @@
 import { Parser, Writer, Store, DataFactory } from 'n3'
-import type { Quad } from '@rdfjs/types'
+import type { Quad, Term } from '@rdfjs/types'
 
 export class PatchValidationError extends Error {
   readonly status = 422
@@ -20,6 +20,7 @@ export class PatchConflictError extends Error {
 export interface AppliedPatch {
   content: string
   contentType: 'text/turtle; charset=utf-8'
+  changed: boolean
 }
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
@@ -185,6 +186,9 @@ export async function applyInsertDeleteTurtlePatch(
     }
   }
 
+  const before = new Set<string>()
+  for (const q of existingStore) before.add(quadKey(q))
+
   for (const q of deleteQuads) {
     const matches = existingStore.getQuads(
       q.subject,
@@ -224,10 +228,32 @@ export async function applyInsertDeleteTurtlePatch(
     writer.end((err, result) => (err ? reject(err) : resolve(result)))
   })
 
+  let changed = existingStore.size !== before.size
+  if (!changed) {
+    for (const q of existingStore) {
+      if (!before.has(quadKey(q))) {
+        changed = true
+        break
+      }
+    }
+  }
+
   return {
     content,
     contentType: 'text/turtle; charset=utf-8',
+    changed,
   }
+}
+
+function quadKey(q: Quad): string {
+  return [q.subject, q.predicate, q.object, q.graph].map(termKey).join(' ')
+}
+
+function termKey(term: Term): string {
+  if (term.termType === 'Literal') {
+    return `L|${term.value}|${term.datatype.value}|${term.language}`
+  }
+  return `${term.termType}|${term.value}`
 }
 
 function collectGroundQuads(

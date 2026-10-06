@@ -19,6 +19,7 @@ import {
   applyInsertDeleteTurtlePatch,
   PatchValidationError,
   PatchConflictError,
+  type AppliedPatch,
 } from "../../../src/patch.js";
 import {
   serializeContainer,
@@ -702,6 +703,47 @@ async function handlePut(
   }
 }
 
+async function respondNoopPatch(options: {
+  repo: string;
+  token: string;
+  branch: string;
+  path: string;
+  ifMatch: string | null;
+  corsHeaders: Record<string, string>;
+}): Promise<Response> {
+  const currentSha = await getFileBlobSha({
+    repo: options.repo,
+    token: options.token,
+    ref: options.branch,
+    path: options.path,
+  }).catch(() => null);
+
+  if (options.ifMatch && currentSha && options.ifMatch !== currentSha) {
+    return new Response("If-Match failed", {
+      status: 412,
+      headers: options.corsHeaders,
+    });
+  }
+
+  const headers: Record<string, string> = {
+    ...options.corsHeaders,
+    "Content-Type": "application/json",
+  };
+  if (currentSha) headers.ETag = `"${currentSha}"`;
+
+  return new Response(
+    JSON.stringify({
+      commit: null,
+      url: null,
+      branch: options.branch,
+      path: options.path,
+      etag: currentSha,
+      changed: false,
+    }),
+    { status: 200, headers },
+  );
+}
+
 async function handlePatch(
   req: Request,
   context: Context,
@@ -800,7 +842,7 @@ async function handlePatch(
     });
   }
 
-  let applied: { content: string; contentType: "text/turtle; charset=utf-8" };
+  let applied: AppliedPatch;
   try {
     applied = await applyInsertDeleteTurtlePatch({ body, existing });
   } catch (e) {
@@ -817,6 +859,17 @@ async function handlePatch(
       });
     }
     throw e;
+  }
+
+  if (!applied.changed) {
+    return await respondNoopPatch({
+      repo: githubRepo,
+      token: githubToken,
+      branch,
+      path,
+      ifMatch,
+      corsHeaders,
+    });
   }
 
   const content = Buffer.from(applied.content, "utf-8").toString("base64");
@@ -1309,7 +1362,7 @@ async function handleChangelogMonthPatch(
     });
   }
 
-  let applied: { content: string; contentType: "text/turtle; charset=utf-8" };
+  let applied: AppliedPatch;
   try {
     applied = await applyInsertDeleteTurtlePatch({ body, existing });
   } catch (e) {
@@ -1326,6 +1379,17 @@ async function handleChangelogMonthPatch(
       });
     }
     throw e;
+  }
+
+  if (!applied.changed) {
+    return await respondNoopPatch({
+      repo: githubRepo,
+      token: githubToken,
+      branch,
+      path,
+      ifMatch,
+      corsHeaders,
+    });
   }
 
   const content = Buffer.from(applied.content, "utf-8").toString("base64");

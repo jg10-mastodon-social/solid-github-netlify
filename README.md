@@ -192,8 +192,9 @@ Flow:
 5. Parse `If-Match` if present (strip weak prefix `W/` and surrounding quotes).
 6. Fetch the existing file from `${page}-draft` via `fetchFileFromGitHub`. A 404 means "create from empty"; any other upstream status passes through.
 7. Hand `body` + `existing` to `applyInsertDeleteTurtlePatch` in `src/patch.ts` (see below). Validation failures throw `PatchValidationError` → 422 with the message; conflict (missing delete target) throws `PatchConflictError` → 409.
-8. Commit the merged turtle to `${page}-draft` via `commitFileOnBranch` with the same `If-Match` handling as PUT. On failure: `GitHubApiError` with status 409 or 422 → 412; other `GitHubApiError` → its status; `GitHubFetchError` / anything else → 502.
-9. Return 200 with `{commit, url, branch, path, etag}` and `ETag: "<contentSha>"`.
+8. If `applyInsertDeleteTurtlePatch` reports `changed: false` — the inserts were all already present and/or a delete+insert cancelled out, so the resulting RDF graph equals the existing one — **skip the write entirely**. GitHub's Contents API would otherwise create an empty commit for byte-identical content. `If-Match` is still honoured (current blob SHA mismatch → 412), then the router returns 200 with `{commit: null, url: null, branch, path, etag, changed: false}` and `ETag: "<blob sha>"`.
+9. Otherwise commit the merged turtle to `${page}-draft` via `commitFileOnBranch` with the same `If-Match` handling as PUT. On failure: `GitHubApiError` with status 409 or 422 → 412; other `GitHubApiError` → its status; `GitHubFetchError` / anything else → 502.
+10. Return 200 with `{commit, url, branch, path, etag}` and `ETag: "<contentSha>"`.
 
 #### `src/patch.ts`
 
@@ -203,10 +204,10 @@ A single function:
 applyInsertDeleteTurtlePatch({ body, existing }: {
   body: Uint8Array         // raw PATCH body, expected to be text/n3
   existing: Uint8Array | null  // null if the file does not exist yet
-}): Promise<{ content: string; contentType: 'text/turtle; charset=utf-8' }>
+}): Promise<{ content: string; contentType: 'text/turtle; charset=utf-8'; changed: boolean }>
 ```
 
-Behavior: parses `body` as N3 (so formulae are preserved as `BlankNode`-rooted sub-graphs), locates the single `solid:InsertDeletePatch` resource, gathers the ground triples inside its `solid:inserts` and `solid:deletes` formulae, validates the constraints listed above, then parses `existing` (if present) as Turtle, removes every delete triple (after verifying each is present — otherwise `PatchConflictError`), adds the insert triples, and serializes the resulting graph back to Turtle. Throws `PatchValidationError` (status 422) on any validation failure; throws `PatchConflictError` (status 409) when a delete triple is not present in the document. The router maps each error class to its status code.
+Behavior: parses `body` as N3 (so formulae are preserved as `BlankNode`-rooted sub-graphs), locates the single `solid:InsertDeletePatch` resource, gathers the ground triples inside its `solid:inserts` and `solid:deletes` formulae, validates the constraints listed above, then parses `existing` (if present) as Turtle, removes every delete triple (after verifying each is present — otherwise `PatchConflictError`), adds the insert triples, and serializes the resulting graph back to Turtle. `changed` reports whether the resulting RDF graph differs from `existing` (graph-level, so Writer prefix/formatting churn alone is not a change). Throws `PatchValidationError` (status 422) on any validation failure; throws `PatchConflictError` (status 409) when a delete triple is not present in the document. The router maps each error class to its status code and skips the commit when `changed` is `false`.
 
 #### Limitations
 
@@ -243,7 +244,7 @@ Solid-OIDC-authenticated publish trigger for the changelog. Each POST produces e
 
 Solid-OIDC-authenticated buffer for past-month changelog edits. Edits the per-month shard file at `<page>/.changelog/<year>/<month>.ttl` on `${page}-draft` (not main) — the edit sits in the draft branch until the next POST drains it via the squash merge.
 
-The month URL has no extension; the on-disk file extension (`.ttl`) is authoritative and derived from the parsed month. `.ttl` and trailing-slash variants of the URL return 404. Same patch constraints as the draft PATCH: ground triples only, no `solid:where`, no blank nodes, no variables. The router validates the path is a month bucket (not root, not year) and the Content-Type is `text/n3`.
+The month URL has no extension; the on-disk file extension (`.ttl`) is authoritative and derived from the parsed month. `.ttl` and trailing-slash variants of the URL return 404. Same patch constraints as the draft PATCH: ground triples only, no `solid:where`, no blank nodes, no variables. The router validates the path is a month bucket (not root, not year) and the Content-Type is `text/n3`. As with the draft PATCH, a patch whose net effect leaves the RDF graph unchanged (`changed: false`) creates no commit and returns 200 with `{changed: false}` and the current `ETag`; `If-Match` is still enforced.
 
 ### Changelog GETs
 
