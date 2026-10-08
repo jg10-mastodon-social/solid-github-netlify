@@ -557,6 +557,25 @@ describe('router GET container listing', () => {
     expect(body).not.toContain('<foo/bar.txt>')
   })
 
+  it('lists a root-draft subdirectory on the literal "draft" branch (GET /history/draft/topics/)', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'index.html', path: 'topics/index.html', type: 'file', sha: 'sha-i' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/topics/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'topics', ref: 'draft' })
+    )
+    const body = await res.text()
+    expect(body).toContain('<index.html> a ldp:Resource .')
+    expect(body).not.toContain('<topics/index.html>')
+  })
+
   it('returns 204 CORS preflight on the container route', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/', {

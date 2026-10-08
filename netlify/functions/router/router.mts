@@ -1682,17 +1682,22 @@ async function handleGet(
   if (isContainer) {
     const stripped = pathname.replace(/\/+$/, "").replace(/^\/+/, "");
     if (draft) {
-      let page: string;
       if (stripped === "history/draft") {
-        page = "";
-      } else if (stripped.endsWith("/history/draft")) {
-        page = stripped.slice(0, -"/history/draft".length);
+        path = "";
+        ref = "draft";
+        containerUri = "/";
+      } else if (stripped.startsWith("history/draft/")) {
+        path = stripped.slice("history/draft/".length);
+        ref = "draft";
+        containerUri = `/${path}/`;
       } else {
-        page = stripped;
+        const page = stripped.endsWith("/history/draft")
+          ? stripped.slice(0, -"/history/draft".length)
+          : stripped;
+        path = page;
+        ref = page ? `${page}-draft` : "draft";
+        containerUri = page ? `/${page}/` : "/";
       }
-      path = page;
-      ref = page ? `${page}-draft` : "draft";
-      containerUri = `/${page}${page ? "/" : ""}`;
     } else {
       path = stripped;
       ref = githubRef;

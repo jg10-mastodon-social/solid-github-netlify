@@ -3388,6 +3388,107 @@ describe('router GET container listing', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
   })
+
+  it('serves GET /history/draft/topics/ as a root-draft subdirectory container on the literal "draft" branch', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'task_management', path: 'topics/task_management', type: 'dir', sha: 'sha-t' },
+        { name: 'index.html', path: 'topics/index.html', type: 'file', sha: 'sha-i' }
+      ]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/topics/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'topics', ref: 'draft' })
+    )
+    expect(mockListDirectoryFromGitHub).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ref: expect.stringContaining('-draft') })
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    const body = await res.text()
+    expect(body).toMatch(/<task_management\/>\s+a\s+ldp:Container,\s+ldp:BasicContainer/)
+    expect(body).toContain('<index.html> a ldp:Resource .')
+    expect(body).not.toContain('<topics/task_management/>')
+    expect(body).not.toContain('<topics/index.html>')
+  })
+
+  it('serves a nested root-draft container at GET /history/draft/topics/task_management/', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [
+        { name: 'index.ttl', path: 'topics/task_management/index.ttl', type: 'file', sha: 'sha-i' }
+      ]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/topics/task_management/', {
+      method: 'GET'
+    })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'topics/task_management', ref: 'draft' })
+    )
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    expect(body).toContain('<index.ttl> a ldp:Resource .')
+    expect(body).not.toContain('<topics/task_management/index.ttl>')
+  })
+
+  it('falls back to GITHUB_REF for a missing root-draft subdirectory on the draft branch', async () => {
+    mockListDirectoryFromGitHub
+      .mockResolvedValueOnce({ status: 404, entries: [] })
+      .mockResolvedValueOnce({
+        status: 200,
+        entries: [
+          { name: 'task_management', path: 'topics/task_management', type: 'dir', sha: 'sha-t' }
+        ]
+      })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/topics/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(mockListDirectoryFromGitHub).toHaveBeenCalledTimes(2)
+    expect(mockListDirectoryFromGitHub.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ path: 'topics', ref: 'draft' })
+    )
+    expect(mockListDirectoryFromGitHub.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ path: 'topics', ref: 'HEAD' })
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  it('probes topics/index.html on the draft branch when a root-draft subdirectory prefers HTML', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: new TextEncoder().encode('<html>topics index</html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: 'W/"idx"',
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/topics/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(mockFetchFileFromGitHub).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'topics/index.html', ref: 'draft' })
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(await res.text()).toBe('<html>topics index</html>')
+  })
 })
 
 describe('router GET directory-index for /:page*/ with Accept preferring HTML', () => {

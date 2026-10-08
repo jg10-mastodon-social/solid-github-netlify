@@ -247,6 +247,17 @@ describe('router container listings via netlify dev', () => {
       /\[github\] GET https:\/\/api\.github\.com\/repos\/octocat\/hello-world\/contents\/foo\?ref=HEAD \(fallback\)/
     )
   })
+
+  it('returns 404 for GET /history/draft/topics/ in offline mode, querying path=topics on ref=draft then ref=HEAD', async () => {
+    const before = getDevServerLogs().length
+    const res = await fetchWithRetry(`${devServerUrl}/history/draft/topics/`, { method: 'GET' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const logs = getDevServerLogs().slice(before)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+    expect(logs).toMatch(/contents\/topics\?ref=draft\b/)
+    expect(logs).toMatch(/contents\/topics\?ref=HEAD \(fallback\)/)
+  })
 })
 
 describe('history routes via netlify dev (offline)', () => {
