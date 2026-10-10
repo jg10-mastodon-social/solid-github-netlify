@@ -42,7 +42,13 @@ import {
 import { Parser, Writer, DataFactory } from "n3";
 import type { Quad } from "@rdfjs/types";
 import { wantsHtmlOverTurtle } from "../../../src/wantsHtmlOverTurtle.js";
-import { authorizeRequest, wacAllowRequest } from "../../../src/wac/runtime.js";
+import {
+  authorizeRequest,
+  loadAcl,
+  saveAcl,
+  wacAllowRequest,
+} from "../../../src/wac/runtime.js";
+import { rulesToTurtle, turtleToRules } from "../../../src/wac/serialize.js";
 import { parentContainerPath } from "../../../src/wac/authorize.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
@@ -572,12 +578,147 @@ function appendVary(existing: string | undefined, value: string): string {
   return parts.join(", ");
 }
 
+function isAclRequest(pathname: string): boolean {
+  return pathname === "/.acl" || pathname.endsWith(".acl");
+}
+
+interface AclScope {
+  scopeKey: string;
+  resourceUri: string;
+  aclUrl: string;
+}
+
+function deriveAclScope(pathname: string, origin: string): AclScope {
+  const aclUrl = `${origin}${pathname}`;
+  const remainder = pathname.slice(0, -".acl".length);
+
+  if (remainder === "" || remainder === "/") {
+    return { scopeKey: "", resourceUri: `${origin}/`, aclUrl };
+  }
+
+  const scopeKey = remainder.startsWith("/") ? remainder : `/${remainder}`;
+  return { scopeKey, resourceUri: `${origin}${scopeKey}`, aclUrl };
+}
+
+async function handleAclGet(
+  req: Request,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Promise<Response> {
+  const origin = new URL(req.url).origin;
+  const { scopeKey, resourceUri, aclUrl } = deriveAclScope(pathname, origin);
+
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+
+  const authResult = await verifyDpopToken(
+    authHeader,
+    dpopHeader,
+    req.url,
+    "GET",
+    [],
+  );
+
+  if (!authResult.success) {
+    return new Response(authResult.message, {
+      status: authResult.statusCode,
+      headers: corsHeaders,
+    });
+  }
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "GET",
+    path: scopeKey,
+    isAcl: true,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
+  }
+
+  const view = await loadAcl({ path: scopeKey, resourceUri });
+  if (!view.authored) {
+    return new Response("Not Found", { status: 404, headers: corsHeaders });
+  }
+
+  const body = rulesToTurtle({
+    resourceUri,
+    accessPredicate: "accessTo",
+    rules: view.rules,
+  });
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/turtle; charset=utf-8",
+      "Cache-Control": DRAFT_CACHE_CONTROL,
+      "Netlify-CDN-Cache-Control": NETLIFY_CDN_CACHE_CONTROL,
+      Link: `<${aclUrl}>; rel="acl"`,
+    },
+  });
+}
+
+async function handleAclPut(
+  req: Request,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Promise<Response> {
+  const origin = new URL(req.url).origin;
+  const { scopeKey, aclUrl } = deriveAclScope(pathname, origin);
+
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+
+  const authResult = await verifyDpopToken(
+    authHeader,
+    dpopHeader,
+    req.url,
+    "PUT",
+    [],
+  );
+
+  if (!authResult.success) {
+    return new Response(authResult.message, {
+      status: authResult.statusCode,
+      headers: corsHeaders,
+    });
+  }
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "PUT",
+    path: scopeKey,
+    isAcl: true,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
+  }
+
+  const body = await req.text();
+  const rules = turtleToRules(body);
+  await saveAcl({ path: scopeKey, actor: authResult.payload.webid, rules });
+
+  return new Response(JSON.stringify({ path: scopeKey, rules: rules.length }), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      Link: `<${aclUrl}>; rel="acl"`,
+    },
+  });
+}
+
 async function handlePut(
   req: Request,
   context: Context,
   corsHeaders: Record<string, string>,
   pathname: string,
 ): Promise<Response> {
+  if (isAclRequest(pathname)) {
+    return await handleAclPut(req, corsHeaders, pathname);
+  }
+
   if (!isDraftRequest(pathname)) {
     return new Response("Method Not Allowed", {
       status: 405,
@@ -1707,6 +1848,9 @@ async function handleGet(
   corsHeaders: Record<string, string>,
   pathname: string,
 ): Promise<Response> {
+  if (isAclRequest(pathname)) {
+    return await handleAclGet(req, corsHeaders, pathname);
+  }
   if (isHistoryRequest(pathname, context)) {
     return await handleHistoryGet(req, context, corsHeaders, pathname);
   }
@@ -2042,6 +2186,8 @@ export const config: Config = {
     "/:page*/history/draft/",
     "/:page*/history/draft/:doc*",
     "/:page*/history/:rest*",
+    "/:page*/.acl",
+    "/.acl",
     "/:page*/",
     "/:page*/:doc",
     "/",

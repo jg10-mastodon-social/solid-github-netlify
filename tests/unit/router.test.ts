@@ -26,9 +26,23 @@ const mockWacAllowRequest = vi.fn(
         : { user: ['read'], public: ['read'] }
     )
 )
+
+const mockLoadAcl = vi.fn(
+  (input: { path: string; resourceUri: string }) =>
+    Promise.resolve({
+      scopeKey: input.path,
+      resourceUri: input.resourceUri,
+      rules: [],
+      authored: false
+    })
+)
+const mockSaveAcl = vi.fn().mockResolvedValue(undefined)
+
 vi.mock('../../src/wac/runtime.js', () => ({
   authorizeRequest: mockAuthorizeRequest,
-  wacAllowRequest: mockWacAllowRequest
+  wacAllowRequest: mockWacAllowRequest,
+  loadAcl: mockLoadAcl,
+  saveAcl: mockSaveAcl
 }))
 
 const mockLoadWriteConfig: ReturnType<typeof vi.fn> & ((...args: unknown[]) => { writeWebIds: string[] }) =
@@ -122,6 +136,8 @@ describe('router config', () => {
       '/:page*/history/draft/',
       '/:page*/history/draft/:doc*',
       '/:page*/history/:rest*',
+      '/:page*/.acl',
+      '/.acl',
       '/:page*/',
       '/:page*/:doc',
       '/'
@@ -7065,5 +7081,275 @@ describe('router trailing-slash redirect for history containers', () => {
       expect(res.status).toBe(200)
       expect(res.headers.get('Location')).toBeNull()
     })
+  })
+})
+
+describe('router ACL resource routes', () => {
+  beforeEach(() => {
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: { webid: 'https://alice.example/webid#me' }
+    })
+    mockAuthorizeRequest.mockReset()
+    mockAuthorizeRequest.mockResolvedValue({
+      allowed: true,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+    mockLoadAcl.mockReset()
+    mockLoadAcl.mockImplementation(
+      (input: { path: string; resourceUri: string }) =>
+        Promise.resolve({
+          scopeKey: input.path,
+          resourceUri: input.resourceUri,
+          rules: [],
+          authored: false
+        })
+    )
+    mockSaveAcl.mockReset()
+    mockSaveAcl.mockResolvedValue(undefined)
+  })
+
+  it('declares the ACL route patterns in config.path', async () => {
+    const { config } = await import('../../netlify/functions/router/router.mts')
+    expect(config.path).toContain('/.acl')
+    expect(config.path).toContain('/:page*/.acl')
+  })
+
+  it('GET /foo/.acl returns 200 Turtle with an acl Link and no-store when authored', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      authored: true
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    const body = await res.text()
+    expect(body).toContain('acl:accessTo <http://localhost/foo/>')
+    expect(body).toContain('acl:agentClass foaf:Agent')
+  })
+
+  it('authorizes the ACL GET against the derived scope with isAcl', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [],
+      authored: true
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext())
+
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'GET',
+      path: '/foo/',
+      isAcl: true
+    })
+  })
+
+  it('GET /foo/.acl returns 404 when the scope has no authored grants', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /foo/.acl returns 403 when authorizeRequest denies', async () => {
+    mockAuthorizeRequest.mockResolvedValueOnce({
+      allowed: false,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Forbidden')
+    expect(mockLoadAcl).not.toHaveBeenCalled()
+  })
+
+  it('GET /foo/.acl returns 401 when verifyDpopToken fails', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'invalid token'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(401)
+    expect(mockAuthorizeRequest).not.toHaveBeenCalled()
+    expect(mockLoadAcl).not.toHaveBeenCalled()
+  })
+
+  it('PUT /foo/bar.acl saves the member scope and returns 200 JSON with an acl Link', async () => {
+    const body = `@prefix acl: <http://www.w3.org/ns/auth/acl#>.
+<#auth> a acl:Authorization;
+    acl:accessTo <http://localhost/foo/bar>;
+    acl:agent <https://alice.example/webid#me>;
+    acl:mode acl:Read, acl:Write.
+`
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar.acl', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/bar.acl>; rel="acl"')
+    expect(res.headers.get('Content-Type')).toContain('application/json')
+    const json = await res.json()
+    expect(json).toEqual({ path: '/foo/bar', rules: 1 })
+
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'PUT',
+      path: '/foo/bar',
+      isAcl: true
+    })
+    expect(mockSaveAcl).toHaveBeenCalledTimes(1)
+    const saved = mockSaveAcl.mock.calls[0]![0]
+    expect(saved.path).toBe('/foo/bar')
+    expect(saved.actor).toBe('https://alice.example/webid#me')
+    expect(saved.rules).toHaveLength(1)
+  })
+
+  it('PUT /foo/bar.acl returns 403 on denial without saving', async () => {
+    mockAuthorizeRequest.mockResolvedValueOnce({
+      allowed: false,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar.acl', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'text/turtle',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: ''
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(403)
+    expect(mockSaveAcl).not.toHaveBeenCalled()
+  })
+
+  it('derives the root container scope for /.acl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext())
+
+    expect(mockLoadAcl).toHaveBeenCalledWith({
+      path: '',
+      resourceUri: 'http://localhost/'
+    })
+  })
+
+  it('derives the container scope for /foo/.acl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext())
+
+    expect(mockLoadAcl).toHaveBeenCalledWith({
+      path: '/foo/',
+      resourceUri: 'http://localhost/foo/'
+    })
+  })
+
+  it('derives the member scope for /foo/bar.acl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext())
+
+    expect(mockLoadAcl).toHaveBeenCalledWith({
+      path: '/foo/bar',
+      resourceUri: 'http://localhost/foo/bar'
+    })
+  })
+
+  it('derives the root-level member scope for /bar.acl', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/bar.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext())
+
+    expect(mockLoadAcl).toHaveBeenCalledWith({
+      path: '/bar',
+      resourceUri: 'http://localhost/bar'
+    })
+  })
+
+  it('PATCH /foo/bar.acl still returns 405', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: ''
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(405)
+    expect(mockSaveAcl).not.toHaveBeenCalled()
   })
 })
