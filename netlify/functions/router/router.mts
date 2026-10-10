@@ -47,6 +47,7 @@ import {
   loadAcl,
   saveAcl,
   wacAllowRequest,
+  listAclAudit,
 } from "../../../src/wac/runtime.js";
 import { rulesToTurtle, turtleToRules } from "../../../src/wac/serialize.js";
 import { parentContainerPath } from "../../../src/wac/authorize.js";
@@ -705,6 +706,62 @@ async function handleAclPut(
       ...corsHeaders,
       "Content-Type": "application/json",
       Link: `<${aclUrl}>; rel="acl"`,
+    },
+  });
+}
+
+async function handleAclAuditGet(
+  req: Request,
+  context: Context,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Promise<Response> {
+  if (!pathname.endsWith("/")) {
+    return trailingSlashRedirect(pathname, corsHeaders);
+  }
+
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+
+  const authResult = await verifyDpopToken(
+    authHeader,
+    dpopHeader,
+    req.url,
+    "GET",
+    [],
+  );
+
+  if (!authResult.success) {
+    return new Response(authResult.message, {
+      status: authResult.statusCode,
+      headers: corsHeaders,
+    });
+  }
+
+  const page = context.params.page ?? "";
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "GET",
+    path: page ? `/${page}/` : "",
+    isAcl: true,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
+  }
+
+  const allEvents = await listAclAudit();
+  const events = page
+    ? allEvents.filter((event) => event.scope.startsWith(`/${page}`))
+    : allEvents;
+
+  return new Response(JSON.stringify(events), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      "Cache-Control": DRAFT_CACHE_CONTROL,
+      "Netlify-CDN-Cache-Control": NETLIFY_CDN_CACHE_CONTROL,
     },
   });
 }
@@ -1848,6 +1905,12 @@ async function handleGet(
   corsHeaders: Record<string, string>,
   pathname: string,
 ): Promise<Response> {
+  if (
+    pathname.endsWith("/history/acl/") ||
+    pathname.endsWith("/history/acl")
+  ) {
+    return await handleAclAuditGet(req, context, corsHeaders, pathname);
+  }
   if (isAclRequest(pathname)) {
     return await handleAclGet(req, corsHeaders, pathname);
   }

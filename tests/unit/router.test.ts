@@ -37,12 +37,14 @@ const mockLoadAcl = vi.fn(
     })
 )
 const mockSaveAcl = vi.fn().mockResolvedValue(undefined)
+const mockListAclAudit = vi.fn().mockResolvedValue([])
 
 vi.mock('../../src/wac/runtime.js', () => ({
   authorizeRequest: mockAuthorizeRequest,
   wacAllowRequest: mockWacAllowRequest,
   loadAcl: mockLoadAcl,
-  saveAcl: mockSaveAcl
+  saveAcl: mockSaveAcl,
+  listAclAudit: mockListAclAudit
 }))
 
 const mockLoadWriteConfig: ReturnType<typeof vi.fn> & ((...args: unknown[]) => { writeWebIds: string[] }) =
@@ -7351,5 +7353,148 @@ describe('router ACL resource routes', () => {
 
     expect(res.status).toBe(405)
     expect(mockSaveAcl).not.toHaveBeenCalled()
+  })
+})
+
+describe('router GET ACL audit ledger', () => {
+  beforeEach(() => {
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: { webid: 'https://alice.example/webid#me' }
+    })
+    mockAuthorizeRequest.mockReset()
+    mockAuthorizeRequest.mockResolvedValue({
+      allowed: true,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+    mockListAclAudit.mockReset()
+    mockListAclAudit.mockResolvedValue([])
+  })
+
+  function auditEvent(scope: string) {
+    return {
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: 'https://alice.example/webid#me',
+      scope,
+      op: 'replace',
+      prevHash: null,
+      hash: 'hash'
+    }
+  }
+
+  it('returns 200 with the audit events as JSON for a page scope', async () => {
+    const events = [auditEvent('/foo/')]
+    mockListAclAudit.mockResolvedValueOnce(events)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/acl/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', rest: 'acl/' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/json')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+    expect(await res.json()).toEqual(events)
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'GET',
+      path: '/foo/',
+      isAcl: true
+    })
+  })
+
+  it('returns 403 Forbidden when authorizeRequest denies', async () => {
+    mockAuthorizeRequest.mockResolvedValueOnce({
+      allowed: false,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/acl/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', rest: 'acl/' } }))
+
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Forbidden')
+    expect(mockListAclAudit).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 when verifyDpopToken fails', async () => {
+    mockVerifyDpopToken.mockResolvedValueOnce({
+      success: false,
+      statusCode: 401,
+      message: 'invalid token'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/acl/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', rest: 'acl/' } }))
+
+    expect(res.status).toBe(401)
+    expect(mockListAclAudit).not.toHaveBeenCalled()
+  })
+
+  it('redirects /foo/history/acl to the trailing-slash form with 301', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/acl', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', rest: 'acl' } }))
+
+    expect(res.status).toBe(301)
+    expect(res.headers.get('Location')).toBe('/foo/history/acl/')
+    expect(mockListAclAudit).not.toHaveBeenCalled()
+  })
+
+  it('filters events to the requested page scope prefix', async () => {
+    mockListAclAudit.mockResolvedValueOnce([
+      auditEvent('/foo/'),
+      auditEvent('/foo/bar/'),
+      auditEvent('/other/')
+    ])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/acl/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', rest: 'acl/' } }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toHaveLength(2)
+    expect(body.map((e: { scope: string }) => e.scope)).toEqual(['/foo/', '/foo/bar/'])
+  })
+
+  it('returns all events when there is no page prefix', async () => {
+    const events = [auditEvent('/foo/'), auditEvent('/other/')]
+    mockListAclAudit.mockResolvedValueOnce(events)
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/acl/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: '', rest: 'acl/' } }))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual(events)
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'GET',
+      path: '',
+      isAcl: true
+    })
   })
 })

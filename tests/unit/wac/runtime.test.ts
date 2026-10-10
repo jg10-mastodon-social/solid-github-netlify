@@ -87,9 +87,12 @@ import {
   authorizeRequest,
   wacAllowRequest,
   loadAcl,
-  saveAcl
+  saveAcl,
+  listAclAudit
 } from '../../../src/wac/runtime.js'
 import { rulesetId } from '../../../src/wac/policy.js'
+import { appendEvent } from '../../../src/wac/audit.js'
+import { openJsonStore } from '../../../src/wac/blobs.js'
 
 const owner = 'https://owner.example/profile#me'
 const stranger = 'https://stranger.example/profile#me'
@@ -232,6 +235,26 @@ describe('saveAcl', () => {
     expect(events[0].scope).toBe('/foo/')
     expect(events[0].actor).toBe(owner)
     expect(events[0].after).toBe(rulesetId(rules))
+  })
+
+  it('lists appended audit events from the default acl-audit store', async () => {
+    const store = openJsonStore('acl-audit')
+    await appendEvent(store, {
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: owner,
+      scope: '/foo/',
+      op: 'grant'
+    })
+
+    const events = await listAclAudit()
+
+    expect(events).toHaveLength(1)
+    expect(events[0].scope).toBe('/foo/')
+    expect(events[0].actor).toBe(owner)
+
+    const defaultStore = hoisted.getStore({ name: 'acl-audit' })
+    const keys = [...defaultStore.entries.keys()].filter((key) => key.startsWith('events/'))
+    expect(keys).toHaveLength(1)
   })
 
   it('honours ACL_STORE and ACL_AUDIT_STORE env overrides', async () => {

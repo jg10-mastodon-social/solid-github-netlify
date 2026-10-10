@@ -13,7 +13,8 @@ import { authorize } from './authorize.js'
 import type { AuthorizeResult } from './authorize.js'
 import { wacAllow } from './evaluate.js'
 import type { Mode, Rule } from './evaluate.js'
-import { appendEvent } from './audit.js'
+import { appendEvent, listEvents } from './audit.js'
+import type { AuditEvent } from './audit.js'
 
 export interface RequestAuthInput {
   webId?: string
@@ -96,4 +97,10 @@ export async function saveAcl(input: SaveAclInput): Promise<void> {
     op: 'replace',
     after: rulesetId(input.rules)
   })
+}
+
+export async function listAclAudit(): Promise<AuditEvent[]> {
+  const { aclAuditStore } = loadAclConfig()
+  const store = openJsonStore(aclAuditStore)
+  return listEvents(store)
 }
