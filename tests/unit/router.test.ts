@@ -230,7 +230,7 @@ describe('router GET proxies a file from GitHub', () => {
     expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
   })
 
-  it('forwards the upstream Cache-Control header', async () => {
+  it('sets the public edge-cache headers instead of the upstream Cache-Control', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
       body: textBody('ok'),
@@ -243,7 +243,10 @@ describe('router GET proxies a file from GitHub', () => {
     const req = new Request('http://localhost/foo/bar', { method: 'GET' })
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
-    expect(res.headers.get('Cache-Control')).toBe('private, max-age=60')
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe(
+      'public, durable, max-age=60, stale-while-revalidate=86400'
+    )
   })
 
   it('assembles path from page and doc on the published route', async () => {
@@ -508,6 +511,27 @@ describe('router GET on draft route', () => {
     )
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('draft root')
+  })
+
+  it('keeps draft GET responses private, no-store and off the public CDN cache', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('draft content'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: 'public, max-age=60'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).not.toBe(
+      'public, durable, max-age=60, stale-while-revalidate=86400'
+    )
   })
 })
 
@@ -1185,7 +1209,7 @@ describe('router WAC-Allow omitted on published GET', () => {
     expect(res.headers.get('WAC-Allow')).toBeNull()
   })
 
-  it('does not set Netlify-CDN-Cache-Control on the published route', async () => {
+  it('sets the public edge-cache headers on the published route', async () => {
     mockFetchFileFromGitHub.mockResolvedValueOnce({
       status: 200,
       body: new TextEncoder().encode('ok'),
@@ -1199,8 +1223,10 @@ describe('router WAC-Allow omitted on published GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Cache-Control')).toBe('private, max-age=60')
-    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBeNull()
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe(
+      'public, durable, max-age=60, stale-while-revalidate=86400'
+    )
   })
 
   it('exposes WAC-Allow via Access-Control-Expose-Headers on the published route CORS preflight', async () => {
@@ -3291,6 +3317,21 @@ describe('router GET container listing', () => {
     expect(res.headers.get('Vary')).toContain('Origin')
   })
 
+  it('sets the public edge-cache headers and Vary: Accept on the container listing', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe(
+      'public, durable, max-age=60, stale-while-revalidate=86400'
+    )
+    expect(res.headers.get('Vary')).toContain('Accept')
+  })
+
   it('GET /foo/ calls listCommitsForPath with perPage=1 against HEAD to fetch the latest commit', async () => {
     mockListDirectoryFromGitHub.mockResolvedValueOnce({
       status: 200,
@@ -3626,6 +3667,31 @@ describe('router GET directory-index for /:page*/ with Accept preferring HTML', 
       expect.objectContaining({ path: 'foo/index.html', ref: 'HEAD' })
     )
     expect(mockListDirectoryFromGitHub).not.toHaveBeenCalled()
+  })
+
+  it('sets the public edge-cache headers and Vary: Accept on the HTML directory index', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('<html>foo index</html>'),
+      contentType: 'text/html; charset=utf-8',
+      etag: 'W/"idx"',
+      cacheControl: 'private, max-age=1'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', {
+      method: 'GET',
+      headers: { Accept: 'text/html' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe(
+      'public, durable, max-age=60, stale-while-revalidate=86400'
+    )
+    expect(res.headers.get('Vary')).toContain('Accept')
   })
 
   it('GET / (root) with Accept: text/html serves index.html at the repo root', async () => {

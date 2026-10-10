@@ -62,6 +62,8 @@ function formatWacAllow(wac: { user: string[]; public: string[] }): string {
 
 const DRAFT_CACHE_CONTROL = "private, no-store";
 const NETLIFY_CDN_CACHE_CONTROL = "no-store";
+const PUBLIC_CACHE_CONTROL = "public, max-age=60";
+const PUBLIC_CDN_CACHE_CONTROL = "public, durable, max-age=60, stale-while-revalidate=86400";
 
 function applyDraftHeaders(
   headers: Record<string, string>,
@@ -2086,11 +2088,15 @@ async function handleContainerGet(ctx: ContainerGetContext): Promise<Response> {
       ...ctx.corsHeaders,
       "Content-Type": "text/turtle; charset=utf-8",
     };
+    headers["Vary"] = appendVary(headers["Vary"], "Accept");
     if (ctx.req.headers.get("if-none-match")) {
       headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
     }
     if (ctx.draft) {
       applyDraftHeaders(headers, ctx);
+    } else {
+      headers["Cache-Control"] = PUBLIC_CACHE_CONTROL;
+      headers["Netlify-CDN-Cache-Control"] = PUBLIC_CDN_CACHE_CONTROL;
     }
     return new Response(turtle, { status: 200, headers });
   } catch (error) {
@@ -2187,8 +2193,9 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
     }
     if (ctx.draft) {
       applyDraftHeaders(headers, ctx);
-    } else if (result.cacheControl) {
-      headers["Cache-Control"] = result.cacheControl;
+    } else {
+      headers["Cache-Control"] = PUBLIC_CACHE_CONTROL;
+      headers["Netlify-CDN-Cache-Control"] = PUBLIC_CDN_CACHE_CONTROL;
     }
 
     const body = result.status === 304 ? null : (result.body as BodyInit);
@@ -2219,6 +2226,7 @@ function buildDirectoryIndexResponse(
   const headers: Record<string, string> = { ...corsHeaders };
   if (result.contentType) headers["Content-Type"] = result.contentType;
   if (result.etag) headers["ETag"] = result.etag;
+  headers["Vary"] = appendVary(headers["Vary"], "Accept");
   if (req.headers.get("if-none-match")) {
     headers["Vary"] = appendVary(headers["Vary"], "If-None-Match");
   }
@@ -2226,8 +2234,9 @@ function buildDirectoryIndexResponse(
     headers["WAC-Allow"] = 'user="read", public="read"';
     headers["Cache-Control"] = DRAFT_CACHE_CONTROL;
     headers["Netlify-CDN-Cache-Control"] = NETLIFY_CDN_CACHE_CONTROL;
-  } else if (result.cacheControl) {
-    headers["Cache-Control"] = result.cacheControl;
+  } else {
+    headers["Cache-Control"] = PUBLIC_CACHE_CONTROL;
+    headers["Netlify-CDN-Cache-Control"] = PUBLIC_CDN_CACHE_CONTROL;
   }
   const body = result.status === 304 ? null : (result.body as BodyInit);
   return new Response(body, { status: result.status, headers });
