@@ -42,6 +42,8 @@ import {
 import { Parser, Writer, DataFactory } from "n3";
 import type { Quad } from "@rdfjs/types";
 import { wantsHtmlOverTurtle } from "../../../src/wantsHtmlOverTurtle.js";
+import { authorizeRequest } from "../../../src/wac/runtime.js";
+import { parentContainerPath } from "../../../src/wac/authorize.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
@@ -427,6 +429,16 @@ function githubToken(): string {
   return loadGithubConfig().githubToken;
 }
 
+async function pathExists(
+  repo: string,
+  token: string,
+  ref: string,
+  path: string,
+): Promise<boolean> {
+  const sha = await getFileBlobSha({ repo, token, ref, path }).catch(() => null);
+  return sha !== null;
+}
+
 function monthFromIso(iso: string): number | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -588,7 +600,6 @@ async function handlePut(
     });
   }
 
-  const { writeWebIds } = loadWriteConfig();
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
 
@@ -597,7 +608,7 @@ async function handlePut(
     dpopHeader,
     req.url,
     "PUT",
-    writeWebIds,
+    [],
   );
 
   if (!authResult.success) {
@@ -633,6 +644,21 @@ async function handlePut(
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
   const branch = page ? `${page}-draft` : "draft";
+
+  const exists =
+    (await pathExists(githubRepo, githubToken, branch, path)) ||
+    (await pathExists(githubRepo, githubToken, githubRef, path));
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "PUT",
+    path: `/${path}`,
+    containerPath: parentContainerPath(`/${path}`),
+    exists,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
+  }
+
   const body = await req.arrayBuffer();
   const content = Buffer.from(body).toString("base64");
   const message = `Update ${path} via solid-github-netlify`;
@@ -757,7 +783,6 @@ async function handlePatch(
     });
   }
 
-  const { writeWebIds } = loadWriteConfig();
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
 
@@ -766,7 +791,7 @@ async function handlePatch(
     dpopHeader,
     req.url,
     "PATCH",
-    writeWebIds,
+    [],
   );
 
   if (!authResult.success) {
@@ -791,6 +816,16 @@ async function handlePatch(
       status: 400,
       headers: corsHeaders,
     });
+  }
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "PATCH",
+    path: `/${path}`,
+    insertOnly: false,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
   }
 
   if (!doc.toLowerCase().endsWith(".ttl")) {
@@ -1286,7 +1321,6 @@ async function handleChangelogMonthPatch(
     });
   }
 
-  const { writeWebIds } = loadWriteConfig();
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
 
@@ -1295,7 +1329,7 @@ async function handleChangelogMonthPatch(
     dpopHeader,
     req.url,
     "PATCH",
-    writeWebIds,
+    [],
   );
 
   if (!authResult.success) {
@@ -1318,6 +1352,16 @@ async function handleChangelogMonthPatch(
       status: 400,
       headers: corsHeaders,
     });
+  }
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "PATCH",
+    path: `/${page}/history/changelog/${year}/${monthPadded}`,
+    insertOnly: false,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
   }
 
   const contentTypeHeader = req.headers.get("content-type");
@@ -1452,7 +1496,6 @@ async function handleChangelogPost(
   corsHeaders: Record<string, string>,
   pathname: string,
 ): Promise<Response> {
-  const { writeWebIds } = loadWriteConfig();
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
 
@@ -1461,7 +1504,7 @@ async function handleChangelogPost(
     dpopHeader,
     req.url,
     "POST",
-    writeWebIds,
+    [],
   );
 
   if (!authResult.success) {
@@ -1487,6 +1530,15 @@ async function handleChangelogPost(
       status: 400,
       headers: corsHeaders,
     });
+  }
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "POST",
+    path: `/${page}/history/changelog/`,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
   }
 
   const contentTypeHeader = req.headers.get("content-type");

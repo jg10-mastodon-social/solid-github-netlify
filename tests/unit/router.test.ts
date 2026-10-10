@@ -11,6 +11,14 @@ vi.mock('../../src/auth.js', () => ({
 
 const mockVerifyDpopToken = vi.mocked(verifyDpopToken)
 
+const mockAuthorizeRequest = vi.fn().mockResolvedValue({
+  allowed: true,
+  required: { target: 'write' },
+  granted: [],
+  ownerOverride: false
+})
+vi.mock('../../src/wac/runtime.js', () => ({ authorizeRequest: mockAuthorizeRequest }))
+
 const mockLoadWriteConfig: ReturnType<typeof vi.fn> & ((...args: unknown[]) => { writeWebIds: string[] }) =
   vi.fn(() => ({ writeWebIds: [] as string[] }))
 const mockLoadGithubConfig = vi.fn(() => ({
@@ -502,6 +510,8 @@ describe('router PUT method handling', () => {
 describe('router PUT commit flow', () => {
   beforeEach(() => {
     mockCommitFileOnBranch.mockReset()
+    mockGetFileBlobSha.mockReset()
+    mockGetFileBlobSha.mockResolvedValue(null)
     mockIsPathSafe.mockReset()
     mockIsPathSafe.mockReturnValue(true)
     mockLoadGithubConfig.mockReturnValue({
@@ -662,6 +672,31 @@ describe('router PUT commit flow', () => {
     expect(body).toEqual(
       expect.objectContaining({ branch: 'draft', path: 'index.ttl' })
     )
+  })
+
+  it('returns 403 Forbidden when the WAC policy denies the write', async () => {
+    mockAuthorizeRequest.mockResolvedValueOnce({
+      allowed: false,
+      required: { target: 'write' },
+      granted: [],
+      ownerOverride: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '{}'
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Forbidden')
+    expect(mockCommitFileOnBranch).not.toHaveBeenCalled()
   })
 })
 
@@ -2001,7 +2036,7 @@ ex:alice ex:knows ex:bob .
       'dpop',
       expect.any(String),
       'PATCH',
-      ['https://alice.example/webid#me']
+      []
     )
   })
 
@@ -2825,7 +2860,7 @@ describe('router PUT conditional requests with If-Match', () => {
   })
 
   it('returns 412 Precondition Failed when If-None-Match: * and the file exists on the draft branch', async () => {
-    mockGetFileBlobSha.mockResolvedValueOnce('existing-blob-sha')
+    mockGetFileBlobSha.mockResolvedValue('existing-blob-sha')
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/history/draft/bar', {
@@ -2916,6 +2951,7 @@ describe('router GET container listing', () => {
       githubRef: 'HEAD'
     })
     mockVerifyDpopToken.mockReset()
+    mockCommitFileOnBranch.mockReset()
     mockLoadWriteConfig.mockReturnValue({ writeWebIds: [] as string[] })
   })
 

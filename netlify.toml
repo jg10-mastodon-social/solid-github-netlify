@@ -26,5 +26,6 @@
 
 [context.dev.environment]
   WRITE_WEBIDS = "https://test.example/webid#me"
+  OWNER_WEBIDS = "https://test.example/webid#me"
   GITHUB_REPO = "octocat/hello-world"
   GITHUB_REF = "HEAD"

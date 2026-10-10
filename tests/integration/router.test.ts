@@ -16,9 +16,18 @@ vi.mock('../../src/auth.js', () => ({
   verifyDpopToken: mockVerifyDpopToken
 }))
 
+const mockAuthorizeRequest = vi.fn().mockResolvedValue({
+  allowed: true,
+  required: { target: 'write' },
+  granted: [],
+  ownerOverride: false
+})
+vi.mock('../../src/wac/runtime.js', () => ({ authorizeRequest: mockAuthorizeRequest }))
+
 const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn(() => true)
 const mockCommitFileOnBranch = vi.fn()
+const mockGetFileBlobSha = vi.fn(() => Promise.resolve(null))
 const mockListDirectoryFromGitHub = vi.fn()
 const mockListCommitsForPath = vi.fn()
 
@@ -29,6 +38,7 @@ vi.mock('../../src/github.js', async (importOriginal) => {
     fetchFileFromGitHub: mockFetchFileFromGitHub,
     isPathSafe: mockIsPathSafe,
     commitFileOnBranch: mockCommitFileOnBranch,
+    getFileBlobSha: mockGetFileBlobSha,
     listDirectoryFromGitHub: mockListDirectoryFromGitHub,
     listCommitsForPath: mockListCommitsForPath
   }
