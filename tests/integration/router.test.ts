@@ -56,14 +56,12 @@ vi.mock('../../src/github.js', async (importOriginal) => {
 })
 
 vi.mock('../../src/config.js', () => ({
-  loadWriteConfig: () => ({ writeWebIds: ['https://alice.example/webid#me'] }),
   loadGithubConfig: () => ({
     githubRepo: 'octocat/hello-world',
     githubToken: 'ghp_test',
     githubRef: 'HEAD'
   }),
   loadConfig: () => ({
-    writeWebIds: ['https://alice.example/webid#me'],
     githubRepo: 'octocat/hello-world',
     githubToken: 'ghp_test',
     githubRef: 'HEAD'

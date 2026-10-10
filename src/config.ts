@@ -1,26 +1,7 @@
-export interface WriteConfig {
-  writeWebIds: string[]
-}
-
 export interface GithubConfig {
   githubRepo: string
   githubToken: string
   githubRef: string
-}
-
-export function loadWriteConfig(): WriteConfig {
-  const raw = process.env.WRITE_WEBIDS
-  if (!raw) {
-    throw new Error('WRITE_WEBIDS is required')
-  }
-  const writeWebIds = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-  if (writeWebIds.length === 0) {
-    throw new Error('WRITE_WEBIDS is required')
-  }
-  return { writeWebIds }
 }
 
 export function loadGithubConfig(): GithubConfig {
@@ -62,8 +43,8 @@ export function loadAclConfig(): AclConfig {
   return { ownerWebIds, aclStore, aclAuditStore }
 }
 
-export interface Config extends WriteConfig, GithubConfig {}
+export interface Config extends AclConfig, GithubConfig {}
 
 export function loadConfig(): Config {
-  return { ...loadWriteConfig(), ...loadGithubConfig() }
+  return { ...loadAclConfig(), ...loadGithubConfig() }
 }

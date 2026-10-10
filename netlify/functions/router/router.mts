@@ -1,6 +1,6 @@
 import type { Config, Context } from "@netlify/functions";
 import { type AuthResponse, verifyDpopToken } from "../../../src/auth.js";
-import { loadGithubConfig, loadWriteConfig } from "../../../src/config.js";
+import { loadGithubConfig } from "../../../src/config.js";
 import {
   commitFileOnBranch,
   fetchFileFromGitHub,

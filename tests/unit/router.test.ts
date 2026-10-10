@@ -47,8 +47,6 @@ vi.mock('../../src/wac/runtime.js', () => ({
   listAclAudit: mockListAclAudit
 }))
 
-const mockLoadWriteConfig: ReturnType<typeof vi.fn> & ((...args: unknown[]) => { writeWebIds: string[] }) =
-  vi.fn(() => ({ writeWebIds: [] as string[] }))
 const mockLoadGithubConfig = vi.fn(() => ({
   githubRepo: 'octocat/hello-world',
   githubToken: 'ghp_test',
@@ -56,10 +54,8 @@ const mockLoadGithubConfig = vi.fn(() => ({
 }))
 
 vi.mock('../../src/config.js', () => ({
-  loadWriteConfig: mockLoadWriteConfig,
   loadGithubConfig: mockLoadGithubConfig,
   loadConfig: () => ({
-    writeWebIds: [],
     githubRepo: 'octocat/hello-world',
     githubToken: 'ghp_test',
     githubRef: 'HEAD'
@@ -770,7 +766,6 @@ describe('router WAC-Allow on draft GET', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -837,7 +832,7 @@ describe('router WAC-Allow on draft GET', () => {
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
-  it('returns WAC-Allow with user="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
+  it('returns WAC-Allow with user="read" when the authenticated webid is not in OWNER_WEBIDS', async () => {
     mockVerifyDpopToken.mockResolvedValueOnce({
       success: true,
       payload: {
@@ -1267,7 +1262,6 @@ describe('router draft GET advertises editing headers (CSS-aligned)', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: [] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -1462,7 +1456,6 @@ describe('router PATCH handler', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -2205,7 +2198,6 @@ describe('router changelog month PATCH handler', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -3030,7 +3022,6 @@ describe('router GET container listing', () => {
     })
     mockVerifyDpopToken.mockReset()
     mockCommitFileOnBranch.mockReset()
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: [] as string[] })
   })
 
   it('serves GET / as a Turtle container listing for the repo root', async () => {
@@ -3192,7 +3183,6 @@ describe('router GET container listing', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockListDirectoryFromGitHub.mockResolvedValueOnce({
       status: 200,
       entries: []
@@ -3634,7 +3624,6 @@ describe('router GET directory-index for /:page*/ with Accept preferring HTML', 
       githubRef: 'HEAD'
     })
     mockVerifyDpopToken.mockReset()
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: [] as string[] })
   })
 
   function textBody(text: string): Uint8Array {
@@ -4999,7 +4988,6 @@ describe('router changelog POST handler', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -5453,7 +5441,6 @@ describe('router changelog root GET', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -5614,7 +5601,6 @@ describe('router changelog root GET advertises writable resource headers', () =>
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -5745,7 +5731,7 @@ describe('router changelog root GET advertises writable resource headers', () =>
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
   })
 
-  it('returns WAC-Allow: user="read", public="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
+  it('returns WAC-Allow: user="read", public="read" when the authenticated webid is not in OWNER_WEBIDS', async () => {
     mockVerifyDpopToken.mockResolvedValueOnce({
       success: true,
       payload: {
@@ -6008,7 +5994,6 @@ describe('router changelog month GET', () => {
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -6516,7 +6501,6 @@ describe('router changelog month GET advertises writable resource headers', () =
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
@@ -6658,7 +6642,7 @@ describe('router changelog month GET advertises writable resource headers', () =
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
   })
 
-  it('returns WAC-Allow: user="read", public="read" when the authenticated webid is not in WRITE_WEBIDS', async () => {
+  it('returns WAC-Allow: user="read", public="read" when the authenticated webid is not in OWNER_WEBIDS', async () => {
     mockVerifyDpopToken.mockResolvedValueOnce({
       success: true,
       payload: {
@@ -7584,7 +7568,6 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
         client_id: 'client1'
       }
     })
-    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
     mockLoadGithubConfig.mockReturnValue({
       githubRepo: 'octocat/hello-world',
       githubToken: 'ghp_test',
