@@ -136,7 +136,7 @@ export default async (req: Request, context: Context) => {
       });
     }
     if (req.method === "GET") {
-      return handleGet(req, context, corsHeaders, pathname);
+      return await handleGet(req, context, corsHeaders, pathname);
     }
     return new Response(
       `${req.method} ${context.params.page} / ${context.params.doc}`,
