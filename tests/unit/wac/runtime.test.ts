@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { PolicyDoc } from '../../../src/wac/policy.js'
+import type { AuditEvent } from '../../../src/wac/audit.js'
+import type { Rule } from '../../../src/wac/evaluate.js'
 
 interface Entry {
   data: unknown
@@ -80,7 +82,14 @@ vi.mock('@netlify/blobs', () => ({
   getStore: (options: unknown) => hoisted.getStore(options as { name: string })
 }))
 
-import { loadEffectivePolicy, authorizeRequest, wacAllowRequest } from '../../../src/wac/runtime.js'
+import {
+  loadEffectivePolicy,
+  authorizeRequest,
+  wacAllowRequest,
+  loadAcl,
+  saveAcl
+} from '../../../src/wac/runtime.js'
+import { rulesetId } from '../../../src/wac/policy.js'
 
 const owner = 'https://owner.example/profile#me'
 const stranger = 'https://stranger.example/profile#me'
@@ -178,5 +187,69 @@ describe('wacAllowRequest', () => {
 
     expect(result.public).toEqual([])
     expect(result.user).toEqual(result.public)
+  })
+})
+
+const resourceUri = 'https://pod.example/foo/'
+
+describe('loadAcl', () => {
+  it('returns authored false and empty rules when no explicit scope entry exists', async () => {
+    const view = await loadAcl({ path: '/foo/', resourceUri })
+
+    expect(view).toEqual({
+      scopeKey: '/foo/',
+      resourceUri,
+      rules: [],
+      authored: false
+    })
+  })
+})
+
+describe('saveAcl', () => {
+  it('persists rules and reports them as authored on reload', async () => {
+    await loadEffectivePolicy()
+    const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+
+    await saveAcl({ path: '/foo/', actor: owner, rules })
+
+    const view = await loadAcl({ path: '/foo/', resourceUri })
+    expect(view.authored).toBe(true)
+    expect(view.rules).toEqual(rules)
+  })
+
+  it('appends exactly one audit event with matching scope, actor and ruleset id', async () => {
+    await loadEffectivePolicy()
+    const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+
+    await saveAcl({ path: '/foo/', actor: owner, rules })
+
+    const auditStore = hoisted.getStore({ name: 'acl-audit' })
+    const events = [...auditStore.entries.entries()]
+      .filter(([key]) => key.startsWith('events/'))
+      .map(([, entry]) => entry.data as AuditEvent)
+
+    expect(events).toHaveLength(1)
+    expect(events[0].scope).toBe('/foo/')
+    expect(events[0].actor).toBe(owner)
+    expect(events[0].after).toBe(rulesetId(rules))
+  })
+
+  it('honours ACL_STORE and ACL_AUDIT_STORE env overrides', async () => {
+    process.env.ACL_STORE = 'custom-acl'
+    process.env.ACL_AUDIT_STORE = 'custom-audit'
+    await loadEffectivePolicy()
+    const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+
+    await saveAcl({ path: '/bar/', actor: owner, rules })
+
+    const custom = hoisted.getStore({ name: 'custom-acl' })
+    expect(custom.entries.has('policy')).toBe(true)
+
+    const audit = hoisted.getStore({ name: 'custom-audit' })
+    const keys = [...audit.entries.keys()].filter((key) => key.startsWith('events/'))
+    expect(keys).toHaveLength(1)
+
+    expect(hoisted.getStore({ name: 'acl' }).entries.size).toBe(0)
+    expect(hoisted.getStore({ name: 'acl-audit' }).entries.size).toBe(0)
   })
 })
