@@ -42,6 +42,26 @@ export function loadGithubConfig(): GithubConfig {
   return { githubRepo, githubToken, githubRef }
 }
 
+export interface AclConfig {
+  ownerWebIds: string[]
+  aclStore: string
+  aclAuditStore: string
+}
+
+export function loadAclConfig(): AclConfig {
+  const raw = process.env.OWNER_WEBIDS
+  const ownerWebIds = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  if (ownerWebIds.length === 0) {
+    throw new Error('OWNER_WEBIDS is required')
+  }
+  const aclStore = (process.env.ACL_STORE ?? '').trim() || 'acl'
+  const aclAuditStore = (process.env.ACL_AUDIT_STORE ?? '').trim() || 'acl-audit'
+  return { ownerWebIds, aclStore, aclAuditStore }
+}
+
 export interface Config extends WriteConfig, GithubConfig {}
 
 export function loadConfig(): Config {

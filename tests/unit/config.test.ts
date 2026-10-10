@@ -117,3 +117,90 @@ describe('loadConfig GitHub fields', () => {
     expect(config.githubRef).toBe('main')
   })
 })
+
+describe('loadAclConfig', () => {
+  const ORIGINAL_ENV = process.env
+
+  beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV }
+    delete process.env.OWNER_WEBIDS
+    delete process.env.ACL_STORE
+    delete process.env.ACL_AUDIT_STORE
+  })
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV
+  })
+
+  it('throws when OWNER_WEBIDS is missing', async () => {
+    const { loadAclConfig } = await import('../../src/config.js')
+    expect(() => loadAclConfig()).toThrow('OWNER_WEBIDS is required')
+  })
+
+  it('throws when OWNER_WEBIDS is empty', async () => {
+    process.env.OWNER_WEBIDS = ''
+    const { loadAclConfig } = await import('../../src/config.js')
+    expect(() => loadAclConfig()).toThrow('OWNER_WEBIDS is required')
+  })
+
+  it('throws when OWNER_WEBIDS is only whitespace and commas', async () => {
+    process.env.OWNER_WEBIDS = ' , , '
+    const { loadAclConfig } = await import('../../src/config.js')
+    expect(() => loadAclConfig()).toThrow('OWNER_WEBIDS is required')
+  })
+
+  it('parses a single owner webid', async () => {
+    process.env.OWNER_WEBIDS = 'https://alice.example/webid#me'
+    const { loadAclConfig } = await import('../../src/config.js')
+    const config = loadAclConfig()
+    expect(config.ownerWebIds).toEqual(['https://alice.example/webid#me'])
+  })
+
+  it('parses comma-separated owner webids and trims whitespace', async () => {
+    process.env.OWNER_WEBIDS = ' https://alice.example/webid#me , https://bob.example/webid#me '
+    const { loadAclConfig } = await import('../../src/config.js')
+    const config = loadAclConfig()
+    expect(config.ownerWebIds).toEqual([
+      'https://alice.example/webid#me',
+      'https://bob.example/webid#me'
+    ])
+  })
+
+  it('drops empty entries between commas', async () => {
+    process.env.OWNER_WEBIDS = 'https://alice.example/webid#me,,https://bob.example/webid#me,'
+    const { loadAclConfig } = await import('../../src/config.js')
+    const config = loadAclConfig()
+    expect(config.ownerWebIds).toEqual([
+      'https://alice.example/webid#me',
+      'https://bob.example/webid#me'
+    ])
+  })
+
+  it('defaults aclStore to "acl" and aclAuditStore to "acl-audit"', async () => {
+    process.env.OWNER_WEBIDS = 'https://alice.example/webid#me'
+    const { loadAclConfig } = await import('../../src/config.js')
+    const config = loadAclConfig()
+    expect(config.aclStore).toBe('acl')
+    expect(config.aclAuditStore).toBe('acl-audit')
+  })
+
+  it('uses explicit ACL_STORE and ACL_AUDIT_STORE values', async () => {
+    process.env.OWNER_WEBIDS = 'https://alice.example/webid#me'
+    process.env.ACL_STORE = 'my-acl'
+    process.env.ACL_AUDIT_STORE = 'my-acl-audit'
+    const { loadAclConfig } = await import('../../src/config.js')
+    const config = loadAclConfig()
+    expect(config.aclStore).toBe('my-acl')
+    expect(config.aclAuditStore).toBe('my-acl-audit')
+  })
+
+  it('falls back to defaults when ACL_STORE and ACL_AUDIT_STORE are empty strings', async () => {
+    process.env.OWNER_WEBIDS = 'https://alice.example/webid#me'
+    process.env.ACL_STORE = ''
+    process.env.ACL_AUDIT_STORE = ''
+    const { loadAclConfig } = await import('../../src/config.js')
+    const config = loadAclConfig()
+    expect(config.aclStore).toBe('acl')
+    expect(config.aclAuditStore).toBe('acl-audit')
+  })
+})
