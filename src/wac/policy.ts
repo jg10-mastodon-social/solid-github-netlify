@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
 import type { JsonStore } from './blobs.js'
 import type { Mode, Rule, Rulesets, Scopes } from './evaluate.js'
 import { resolveScope } from './evaluate.js'
+import { canonicalize } from './audit.js'
 
 export interface PolicyDoc {
   schema: number
@@ -69,6 +71,20 @@ export function resolveRuleset(doc: PolicyDoc, path: string): Rule[] {
   const resolution = resolveScope(path, doc.scopes)
   if (resolution === null) return []
   return doc.rulesets[resolution.rulesetId] ?? []
+}
+
+export function rulesetId(rules: Rule[]): string {
+  const hash = createHash('sha256').update(canonicalize(rules)).digest('hex')
+  return `rs_${hash.slice(0, 16)}`
+}
+
+export function setScopeRules(doc: PolicyDoc, scopeKey: string, rules: Rule[]): PolicyDoc {
+  const id = rulesetId(rules)
+  return {
+    ...doc,
+    scopes: { ...doc.scopes, [scopeKey]: { self: id, default: id } },
+    rulesets: { ...doc.rulesets, [id]: rules }
+  }
 }
 
 export async function applyEdit(

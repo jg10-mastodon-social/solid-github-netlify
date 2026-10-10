@@ -7,11 +7,14 @@ import type {
   StoreEntry
 } from '../../../src/wac/blobs.js'
 import type { PolicyDoc } from '../../../src/wac/policy.js'
+import type { Rule } from '../../../src/wac/evaluate.js'
 import {
   loadPolicy,
   bootstrapPolicy,
   resolveRuleset,
   applyEdit,
+  rulesetId,
+  setScopeRules,
   PolicyNotBootstrappedError,
   PolicyConflictError,
   POLICY_KEY,
@@ -306,5 +309,63 @@ describe('applyEdit', () => {
     await applyEdit(store, 'actor', mutate)
 
     expect(seen).toEqual([2, 2])
+  })
+})
+
+describe('rulesetId', () => {
+  const rules: Rule[] = [
+    { subject: { type: 'webid', id: 'https://alice.example/profile#me' }, modes: ['read', 'write'] },
+    { subject: { class: 'public' }, modes: ['read'] }
+  ]
+
+  it('is content-addressed with the rs_ prefix', () => {
+    expect(rulesetId(rules)).toMatch(/^rs_[0-9a-f]{16}$/)
+  })
+
+  it('is stable for equal rules regardless of key order', () => {
+    const reordered: Rule[] = [
+      { modes: ['read', 'write'], subject: { type: 'webid', id: 'https://alice.example/profile#me' } },
+      { modes: ['read'], subject: { class: 'public' } }
+    ]
+    expect(rulesetId(reordered)).toBe(rulesetId(rules))
+  })
+
+  it('differs for different rules', () => {
+    const other: Rule[] = [{ subject: { class: 'public' }, modes: ['read', 'write'] }]
+    expect(rulesetId(other)).not.toBe(rulesetId(rules))
+  })
+})
+
+describe('setScopeRules', () => {
+  const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+
+  it('creates a new scope and ruleset without mutating the input', () => {
+    const doc = policyDoc()
+    const snapshot = JSON.parse(JSON.stringify(doc))
+    const id = rulesetId(rules)
+
+    const next = setScopeRules(doc, '/alice/', rules)
+
+    expect(next).not.toBe(doc)
+    expect(doc).toEqual(snapshot)
+    expect(next.scopes['/alice/']).toEqual({ self: id, default: id })
+    expect(next.rulesets[id]).toEqual(rules)
+  })
+
+  it('updates an existing scope while preserving other scopes and rulesets', () => {
+    const id = rulesetId(rules)
+    const doc = policyDoc({
+      scopes: {
+        '': { self: 'rs_root_self', default: 'rs_root_default' },
+        '/alice/': { self: 'rs_old_self', default: 'rs_old_default' }
+      }
+    })
+
+    const next = setScopeRules(doc, '/alice/', rules)
+
+    expect(next.scopes['']).toEqual({ self: 'rs_root_self', default: 'rs_root_default' })
+    expect(next.scopes['/alice/']).toEqual({ self: id, default: id })
+    expect(next.rulesets.rs_root_self).toEqual(doc.rulesets.rs_root_self)
+    expect(next.rulesets[id]).toEqual(rules)
   })
 })
