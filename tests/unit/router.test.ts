@@ -17,7 +17,19 @@ const mockAuthorizeRequest = vi.fn().mockResolvedValue({
   granted: [],
   ownerOverride: false
 })
-vi.mock('../../src/wac/runtime.js', () => ({ authorizeRequest: mockAuthorizeRequest }))
+
+const mockWacAllowRequest = vi.fn(
+  (input: { webId?: string; path: string }) =>
+    Promise.resolve(
+      input.webId === 'https://alice.example/webid#me'
+        ? { user: ['read', 'write'], public: ['read'] }
+        : { user: ['read'], public: ['read'] }
+    )
+)
+vi.mock('../../src/wac/runtime.js', () => ({
+  authorizeRequest: mockAuthorizeRequest,
+  wacAllowRequest: mockWacAllowRequest
+}))
 
 const mockLoadWriteConfig: ReturnType<typeof vi.fn> & ((...args: unknown[]) => { writeWebIds: string[] }) =
   vi.fn(() => ({ writeWebIds: [] as string[] }))
@@ -862,7 +874,7 @@ describe('router WAC-Allow on draft GET', () => {
       'dpop-proof',
       expect.any(String),
       'GET',
-      ['https://alice.example/webid#me']
+      []
     )
   })
 
@@ -1101,6 +1113,28 @@ describe('router WAC-Allow on draft GET', () => {
     expect(vary).toContain('If-None-Match')
     expect(vary).toContain('Authorization')
     expect(vary).toContain('DPoP')
+  })
+
+  it('derives WAC-Allow from the effective policy for the logical draft path', async () => {
+    mockWacAllowRequest.mockResolvedValueOnce({
+      user: ['read', 'write'],
+      public: ['append']
+    })
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="append"')
+    expect(mockWacAllowRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      path: '/foo/bar'
+    })
   })
 })
 
@@ -5716,7 +5750,7 @@ describe('router changelog root GET advertises writable resource headers', () =>
       'dpop-proof',
       expect.any(String),
       'GET',
-      ['https://alice.example/webid#me']
+      []
     )
   })
 
@@ -6629,7 +6663,7 @@ describe('router changelog month GET advertises writable resource headers', () =
       'dpop-proof',
       expect.any(String),
       'GET',
-      ['https://alice.example/webid#me']
+      []
     )
   })
 

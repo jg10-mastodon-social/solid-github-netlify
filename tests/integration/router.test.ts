@@ -22,7 +22,18 @@ const mockAuthorizeRequest = vi.fn().mockResolvedValue({
   granted: [],
   ownerOverride: false
 })
-vi.mock('../../src/wac/runtime.js', () => ({ authorizeRequest: mockAuthorizeRequest }))
+const mockWacAllowRequest = vi.fn(
+  (input: { webId?: string; path: string }) =>
+    Promise.resolve(
+      input.webId === 'https://alice.example/webid#me'
+        ? { user: ['read', 'write'], public: ['read'] }
+        : { user: ['read'], public: ['read'] }
+    )
+)
+vi.mock('../../src/wac/runtime.js', () => ({
+  authorizeRequest: mockAuthorizeRequest,
+  wacAllowRequest: mockWacAllowRequest
+}))
 
 const mockFetchFileFromGitHub = vi.fn()
 const mockIsPathSafe = vi.fn(() => true)

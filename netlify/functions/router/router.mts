@@ -42,22 +42,15 @@ import {
 import { Parser, Writer, DataFactory } from "n3";
 import type { Quad } from "@rdfjs/types";
 import { wantsHtmlOverTurtle } from "../../../src/wantsHtmlOverTurtle.js";
-import { authorizeRequest } from "../../../src/wac/runtime.js";
+import { authorizeRequest, wacAllowRequest } from "../../../src/wac/runtime.js";
 import { parentContainerPath } from "../../../src/wac/authorize.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
 const DRAFT_SUFFIX = "/history/draft/";
 const CHANGELOG_SUFFIX = "/history/changelog/";
 
-function buildWacAllow(
-  authResult: AuthResponse | undefined,
-  writeWebIds: string[],
-): string {
-  const userMode =
-    authResult?.success && writeWebIds.includes(authResult.payload.webid)
-      ? "read write"
-      : "read";
-  return `user="${userMode}", public="read"`;
+function formatWacAllow(wac: { user: string[]; public: string[] }): string {
+  return `user="${wac.user.join(" ")}", public="${wac.public.join(" ")}"`;
 }
 
 const DRAFT_CACHE_CONTROL = "private, no-store";
@@ -65,9 +58,9 @@ const NETLIFY_CDN_CACHE_CONTROL = "no-store";
 
 function applyDraftHeaders(
   headers: Record<string, string>,
-  ctx: { authResult: AuthResponse | undefined; writeWebIds: string[] },
+  ctx: { wacAllow: string },
 ): void {
-  headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+  headers["WAC-Allow"] = ctx.wacAllow;
   headers["Allow"] = "GET, PUT, OPTIONS";
   headers["Accept-Put"] = "*/*";
   headers["Accept-Patch"] = "text/n3";
@@ -80,14 +73,13 @@ function applyDraftHeaders(
 function applyChangelogHeaders(
   headers: Record<string, string>,
   ctx: {
-    authResult: AuthResponse | undefined;
-    writeWebIds: string[];
+    wacAllow: string;
     allow: string;
     acceptPost?: string;
     acceptPatch?: string;
   },
 ): void {
-  headers["WAC-Allow"] = buildWacAllow(ctx.authResult, ctx.writeWebIds);
+  headers["WAC-Allow"] = ctx.wacAllow;
   headers["Allow"] = ctx.allow;
   if (ctx.acceptPost) headers["Accept-Post"] = ctx.acceptPost;
   if (ctx.acceptPatch) headers["Accept-Patch"] = ctx.acceptPatch;
@@ -970,14 +962,7 @@ async function handleChangelogRootGet(
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
   if (authHeader && dpopHeader) {
-    const { writeWebIds } = loadWriteConfig();
-    authResult = await verifyDpopToken(
-      authHeader,
-      dpopHeader,
-      req.url,
-      "GET",
-      writeWebIds,
-    );
+    authResult = await verifyDpopToken(authHeader, dpopHeader, req.url, "GET", []);
   }
 
   const { githubRef } = loadGithubConfig();
@@ -1012,14 +997,18 @@ async function handleChangelogRootGet(
 
   const body = serializeContainer(containerUri, entries, as);
 
-  const { writeWebIds } = loadWriteConfig();
+  const wacAllow = formatWacAllow(
+    await wacAllowRequest({
+      webId: authResult?.payload?.webid,
+      path: `/${page}/history/changelog/`,
+    }),
+  );
   const headers: Record<string, string> = {
     ...corsHeaders,
     "Content-Type": "text/turtle; charset=utf-8"
   };
   applyChangelogHeaders(headers, {
-    authResult,
-    writeWebIds,
+    wacAllow,
     allow: "GET, POST, OPTIONS",
     acceptPost: "text/turtle"
   });
@@ -1114,14 +1103,7 @@ async function handleChangelogMonthGet(
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
   if (authHeader && dpopHeader) {
-    const { writeWebIds } = loadWriteConfig();
-    authResult = await verifyDpopToken(
-      authHeader,
-      dpopHeader,
-      req.url,
-      "GET",
-      writeWebIds,
-    );
+    authResult = await verifyDpopToken(authHeader, dpopHeader, req.url, "GET", []);
   }
 
   const monthPadded = String(month).padStart(2, "0");
@@ -1287,14 +1269,18 @@ async function handleChangelogMonthGet(
     writer.end((err, result) => (err ? reject(err) : resolve(result)));
   });
 
-  const { writeWebIds } = loadWriteConfig();
+  const wacAllow = formatWacAllow(
+    await wacAllowRequest({
+      webId: authResult?.payload?.webid,
+      path: `/${page}/history/changelog/${year}/${monthPadded}`,
+    }),
+  );
   const headers: Record<string, string> = {
     ...corsHeaders,
     "Content-Type": "text/turtle; charset=utf-8"
   };
   applyChangelogHeaders(headers, {
-    authResult,
-    writeWebIds,
+    wacAllow,
     allow: "GET, PATCH, OPTIONS",
     acceptPatch: "text/n3"
   });
@@ -1784,20 +1770,16 @@ async function handleGet(
   }
 
   let authResult: AuthResponse | undefined;
-  let writeWebIds: string[] = [];
+  let wacAllow = "";
   if (draft) {
     const authHeader = req.headers.get("authorization") ?? undefined;
     const dpopHeader = req.headers.get("dpop") ?? undefined;
     if (authHeader && dpopHeader) {
-      writeWebIds = loadWriteConfig().writeWebIds;
-      authResult = await verifyDpopToken(
-        authHeader,
-        dpopHeader,
-        req.url,
-        "GET",
-        writeWebIds,
-      );
+      authResult = await verifyDpopToken(authHeader, dpopHeader, req.url, "GET", []);
     }
+    wacAllow = formatWacAllow(
+      await wacAllowRequest({ webId: authResult?.payload?.webid, path: `/${path}` }),
+    );
   }
 
   if (isContainer) {
@@ -1813,7 +1795,7 @@ async function handleGet(
       githubRef,
       draft,
       authResult,
-      writeWebIds,
+      wacAllow,
       isPageRoot: !draft,
     });
   }
@@ -1829,7 +1811,7 @@ async function handleGet(
     githubRef,
     draft,
     authResult,
-    writeWebIds,
+    wacAllow,
   });
 }
 
@@ -1845,7 +1827,7 @@ interface ContainerGetContext {
   githubRef: string;
   draft: boolean;
   authResult: AuthResponse | undefined;
-  writeWebIds: string[];
+  wacAllow: string;
   isPageRoot: boolean;
 }
 
@@ -1966,7 +1948,7 @@ interface FileGetContext {
   githubRef: string;
   draft: boolean;
   authResult: AuthResponse | undefined;
-  writeWebIds: string[];
+  wacAllow: string;
 }
 
 async function handleFileGet(ctx: FileGetContext): Promise<Response> {

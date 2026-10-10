@@ -80,7 +80,7 @@ vi.mock('@netlify/blobs', () => ({
   getStore: (options: unknown) => hoisted.getStore(options as { name: string })
 }))
 
-import { loadEffectivePolicy, authorizeRequest } from '../../../src/wac/runtime.js'
+import { loadEffectivePolicy, authorizeRequest, wacAllowRequest } from '../../../src/wac/runtime.js'
 
 const owner = 'https://owner.example/profile#me'
 const stranger = 'https://stranger.example/profile#me'
@@ -162,5 +162,21 @@ describe('authorizeRequest', () => {
     })
     expect(result.allowed).toBe(false)
     expect(result.ownerOverride).toBe(false)
+  })
+})
+
+describe('wacAllowRequest', () => {
+  it('grants the owner read/write/control on the bootstrapped root scope with no public modes', async () => {
+    const result = await wacAllowRequest({ webId: owner, path: '/' })
+
+    expect(result.user).toEqual(['control', 'read', 'write'])
+    expect(result.public).toEqual([])
+  })
+
+  it('reports user equal to public for an anonymous caller', async () => {
+    const result = await wacAllowRequest({ path: '/' })
+
+    expect(result.public).toEqual([])
+    expect(result.user).toEqual(result.public)
   })
 })

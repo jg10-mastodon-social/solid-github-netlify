@@ -1,9 +1,11 @@
 import { loadAclConfig } from '../config.js'
 import { openJsonStore } from './blobs.js'
-import { loadPolicy, bootstrapPolicy } from './policy.js'
+import { loadPolicy, bootstrapPolicy, resolveRuleset } from './policy.js'
 import type { PolicyDoc } from './policy.js'
 import { authorize } from './authorize.js'
 import type { AuthorizeResult } from './authorize.js'
+import { wacAllow } from './evaluate.js'
+import type { Mode } from './evaluate.js'
 
 export interface RequestAuthInput {
   webId?: string
@@ -31,4 +33,13 @@ export async function authorizeRequest(input: RequestAuthInput): Promise<Authori
   const doc = await loadEffectivePolicy()
 
   return authorize({ doc, ownerWebIds, ...input })
+}
+
+export async function wacAllowRequest(input: {
+  webId?: string
+  path: string
+}): Promise<{ user: Mode[]; public: Mode[] }> {
+  const doc = await loadEffectivePolicy()
+  const ruleset = resolveRuleset(doc, input.path)
+  return wacAllow(ruleset, { webId: input.webId })
 }
