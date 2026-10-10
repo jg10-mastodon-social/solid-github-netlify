@@ -7564,3 +7564,172 @@ describe('router GET ACL audit ledger', () => {
     })
   })
 })
+
+describe('router caching invariant (edge-cacheable iff agent-independent)', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockListCommitsForPath.mockResolvedValue([])
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        iss: 'https://issuer.example',
+        iat: 0,
+        exp: 0,
+        client_id: 'client1'
+      }
+    })
+    mockLoadWriteConfig.mockReturnValue({ writeWebIds: ['https://alice.example/webid#me'] })
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+    mockAuthorizeRequest.mockReset()
+    mockAuthorizeRequest.mockResolvedValue({
+      allowed: true,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+    mockLoadAcl.mockReset()
+    mockLoadAcl.mockResolvedValue({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      authored: true
+    })
+    mockSaveAcl.mockReset()
+    mockSaveAcl.mockResolvedValue(undefined)
+  })
+
+  function assertCacheInvariant(res: Response) {
+    const wacAllow = res.headers.get('WAC-Allow')
+    const cdn = res.headers.get('Netlify-CDN-Cache-Control') ?? ''
+    if (wacAllow !== null) {
+      expect(cdn).toBe('no-store')
+    }
+    if (cdn.includes('public')) {
+      expect(wacAllow).toBeNull()
+    }
+  }
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  it('public file GET: no WAC-Allow, cacheable', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    assertCacheInvariant(res)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toContain('public')
+  })
+
+  it('public container GET: no WAC-Allow, cacheable', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      entries: [{ name: 'bar.txt', path: 'foo/bar.txt', type: 'file', sha: 'sha-b' }]
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    assertCacheInvariant(res)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toContain('public')
+  })
+
+  it('draft file GET (authenticated): WAC-Allow present, no-store', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('draft content'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    assertCacheInvariant(res)
+    expect(res.headers.get('WAC-Allow')).not.toBeNull()
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('changelog root GET: WAC-Allow present, no-store', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    assertCacheInvariant(res)
+    expect(res.headers.get('WAC-Allow')).not.toBeNull()
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('changelog month GET: WAC-Allow present, no-store', async () => {
+    mockListCommitsForPath.mockResolvedValueOnce([])
+    mockFetchFileFromGitHub.mockResolvedValue({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/2024/03', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/2024/03' } })
+    )
+
+    expect(res.status).toBe(200)
+    assertCacheInvariant(res)
+    expect(res.headers.get('WAC-Allow')).not.toBeNull()
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+
+  it('.acl GET: no WAC-Allow, no-store', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    assertCacheInvariant(res)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
+  })
+})
