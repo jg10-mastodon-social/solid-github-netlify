@@ -7735,8 +7735,10 @@ describe('router GET ACL audit ledger', () => {
 
   it('filters events to the requested page scope prefix', async () => {
     mockListAclAudit.mockResolvedValueOnce([
+      auditEvent('/foo'),
       auditEvent('/foo/'),
       auditEvent('/foo/bar/'),
+      auditEvent('/foobar/'),
       auditEvent('/other/')
     ])
 
@@ -7749,8 +7751,8 @@ describe('router GET ACL audit ledger', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toHaveLength(2)
-    expect(body.map((e: { scope: string }) => e.scope)).toEqual(['/foo/', '/foo/bar/'])
+    expect(body).toHaveLength(3)
+    expect(body.map((e: { scope: string }) => e.scope)).toEqual(['/foo', '/foo/', '/foo/bar/'])
   })
 
   it('returns all events when there is no page prefix', async () => {

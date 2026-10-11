@@ -875,7 +875,10 @@ async function handleAclAuditGet(
 
   const allEvents = await listAclAudit();
   const events = page
-    ? allEvents.filter((event) => event.scope.startsWith(`/${page}`))
+    ? allEvents.filter(
+        (event) =>
+          event.scope === `/${page}` || event.scope.startsWith(`/${page}/`),
+      )
     : allEvents;
 
   return new Response(JSON.stringify(events), {
