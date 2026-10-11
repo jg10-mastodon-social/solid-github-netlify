@@ -108,9 +108,23 @@ function isShaMismatch(error: unknown): boolean {
   return false;
 }
 
+function aclUrlFor(pathname: string, origin: string): string {
+  if (pathname.endsWith(".acl")) return `${origin}${pathname}`;
+  return `${origin}${pathname}.acl`;
+}
+
 export default async (req: Request, context: Context) => {
-  const corsHeaders = getCorsHeaders(req.headers.get("Origin"));
+  const origin = new URL(req.url).origin;
   const pathname = new URL(req.url).pathname;
+  const response = await route(req, context, pathname);
+  if (req.method === "GET") {
+    response.headers.set("Link", `<${aclUrlFor(pathname, origin)}>; rel="acl"`);
+  }
+  return response;
+};
+
+async function route(req: Request, context: Context, pathname: string) {
+  const corsHeaders = getCorsHeaders(req.headers.get("Origin"));
   console.log(`[router] ${req.method} ${pathname}`);
 
   if (req.method === "OPTIONS") {
@@ -146,7 +160,7 @@ export default async (req: Request, context: Context) => {
   } catch (error) {
     return errorResponse(error, corsHeaders);
   }
-};
+}
 
 function errorResponse(error: unknown, corsHeaders: Record<string, string>): Response {
   if (error instanceof GitHubApiError || error instanceof GitHubFetchError) {
@@ -2249,7 +2263,7 @@ const getCorsHeaders = (origin: string | null) => ({
   "Access-Control-Allow-Headers":
     "Authorization, DPoP, Content-Type, Accept, Accept-Charset, Accept-Datetime, Cache-Control, Date, Digest, If-Match, If-None-Match, Link, Prefer, Range, Signature, Slug, Want-Digest",
   "Access-Control-Expose-Headers":
-    "ETag, Cache-Control, Netlify-CDN-Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch, Accept-Post",
+    "ETag, Cache-Control, Netlify-CDN-Cache-Control, WAC-Allow, Allow, Accept-Put, Accept-Patch, Accept-Post, Link",
   Vary: "Origin",
 });
 

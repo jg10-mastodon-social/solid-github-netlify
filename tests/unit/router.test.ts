@@ -7716,3 +7716,102 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 })
+
+describe('router advertises the ACL resource via Link on GET', () => {
+  beforeEach(() => {
+    mockFetchFileFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockReset()
+    mockListCommitsForPath.mockReset()
+    mockListCommitsForPath.mockResolvedValue([])
+    mockIsPathSafe.mockReset()
+    mockIsPathSafe.mockReturnValue(true)
+    mockLoadGithubConfig.mockReturnValue({
+      githubRepo: 'octocat/hello-world',
+      githubToken: 'ghp_test',
+      githubRef: 'HEAD'
+    })
+    mockVerifyDpopToken.mockReset()
+    mockVerifyDpopToken.mockResolvedValue({
+      success: true,
+      payload: { webid: 'https://alice.example/webid#me' }
+    })
+    mockAuthorizeRequest.mockReset()
+    mockAuthorizeRequest.mockResolvedValue({
+      allowed: true,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+    mockLoadAcl.mockReset()
+    mockLoadAcl.mockResolvedValue({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [],
+      authored: true
+    })
+  })
+
+  function textBody(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+  }
+
+  it('advertises Link on a public file GET', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/bar.acl>; rel="acl"')
+  })
+
+  it('advertises Link on a public container GET', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+  })
+
+  it('advertises Link on the root container GET', async () => {
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: {} }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/.acl>; rel="acl"')
+  })
+
+  it('advertises the ACL resource itself on a .acl GET', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+  })
+
+  it('exposes Link via Access-Control-Expose-Headers on the OPTIONS preflight', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'OPTIONS' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Expose-Headers')).toContain('Link')
+  })
+})

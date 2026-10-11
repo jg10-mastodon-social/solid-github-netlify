@@ -426,7 +426,7 @@ An ACL resource is served under the WAC `acl` link relation and is gated by `con
 - `GET` returns the ACL resource as `text/turtle` (RDF), serialized from the stored JSON policy — the representation the spec requires.
 - `PUT` replaces the scope's authored grants; `PATCH` applies an N3 Patch (same ground-triples subset as the draft PATCH above).
 - `GET` on a path whose scope has no authored grants returns `404` (WAC: no representation, so the path inherits from its nearest ancestor).
-- Every response carries `Link: <{acl URL}>; rel="acl"`.
+- `GET` responses carry `Link: <{acl URL}>; rel="acl"` (per the Solid Protocol, auxiliary resources are advertised on `GET`/`HEAD`).
 
 #### Caching and WAC-Allow
 
