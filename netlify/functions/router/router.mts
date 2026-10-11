@@ -727,6 +727,112 @@ async function handleAclPut(
   });
 }
 
+async function handleAclPatch(
+  req: Request,
+  corsHeaders: Record<string, string>,
+  pathname: string,
+): Promise<Response> {
+  const origin = new URL(req.url).origin;
+  const { scopeKey, resourceUri, aclUrl } = deriveAclScope(pathname, origin);
+
+  const authHeader = req.headers.get("authorization") ?? undefined;
+  const dpopHeader = req.headers.get("dpop") ?? undefined;
+
+  const authResult = await verifyDpopToken(
+    authHeader,
+    dpopHeader,
+    req.url,
+    "PATCH",
+    [],
+  );
+
+  if (!authResult.success) {
+    return new Response(authResult.message, {
+      status: authResult.statusCode,
+      headers: corsHeaders,
+    });
+  }
+
+  const contentTypeHeader = req.headers.get("content-type");
+  const contentTypeBase = contentTypeHeader?.split(";")[0]?.trim().toLowerCase();
+  if (contentTypeBase !== "text/n3") {
+    return new Response("PATCH requires Content-Type: text/n3", {
+      status: 415,
+      headers: corsHeaders,
+    });
+  }
+
+  const body = new Uint8Array(await req.arrayBuffer());
+  const insertOnly = await patchIsInsertOnly(body);
+
+  const decision = await authorizeRequest({
+    webId: authResult.payload.webid,
+    method: "PATCH",
+    path: scopeKey,
+    isAcl: true,
+    insertOnly,
+  });
+  if (!decision.allowed) {
+    return new Response("Forbidden", { status: 403, headers: corsHeaders });
+  }
+
+  const view = await loadAcl({ path: scopeKey, resourceUri });
+  if (!view.authored) {
+    return new Response("Not Found", { status: 404, headers: corsHeaders });
+  }
+
+  const existing = rulesToTurtle({
+    resourceUri,
+    accessPredicate: "accessTo",
+    rules: view.rules,
+  });
+
+  let applied: AppliedPatch;
+  try {
+    applied = await applyInsertDeleteTurtlePatch({
+      body,
+      existing: new TextEncoder().encode(existing),
+    });
+  } catch (e) {
+    if (e instanceof PatchValidationError) {
+      return new Response(e.message, {
+        status: 422,
+        headers: corsHeaders,
+      });
+    }
+    if (e instanceof PatchConflictError) {
+      return new Response(e.message, {
+        status: 409,
+        headers: corsHeaders,
+      });
+    }
+    throw e;
+  }
+
+  if (!applied.changed) {
+    return new Response(JSON.stringify({ path: scopeKey, changed: false }), {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        Link: `<${aclUrl}>; rel="acl"`,
+      },
+    });
+  }
+
+  const rules = turtleToRules(applied.content);
+  await saveAcl({ path: scopeKey, actor: authResult.payload.webid, rules });
+
+  return new Response(JSON.stringify({ path: scopeKey, rules: rules.length }), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      Link: `<${aclUrl}>; rel="acl"`,
+    },
+  });
+}
+
 async function handleAclAuditGet(
   req: Request,
   context: Context,
@@ -983,6 +1089,10 @@ async function handlePatch(
   corsHeaders: Record<string, string>,
   pathname: string,
 ): Promise<Response> {
+  if (isAclRequest(pathname)) {
+    return await handleAclPatch(req, corsHeaders, pathname);
+  }
+
   if (!isDraftRequest(pathname)) {
     return new Response("Method Not Allowed", {
       status: 405,

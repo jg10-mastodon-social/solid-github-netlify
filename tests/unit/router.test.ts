@@ -7460,20 +7460,174 @@ describe('router ACL resource routes', () => {
     })
   })
 
-  it('PATCH /foo/bar.acl still returns 405', async () => {
+  function aclInsertBody(): string {
+    return `@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+@prefix acl: <http://www.w3.org/ns/auth/acl#>.
+_:patch a solid:InsertDeletePatch;
+  solid:inserts {
+    <#auth1> a acl:Authorization;
+      acl:accessTo <http://localhost/foo/>;
+      acl:agent <https://alice.example/webid#me>;
+      acl:mode acl:Write.
+  }.
+`
+  }
+
+  it('PATCH /foo/.acl applies an insert-only N3 patch and saves the merged rules', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      authored: true
+    })
+
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
-    const req = new Request('http://localhost/foo/bar.acl', {
+    const req = new Request('http://localhost/foo/.acl', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'text/n3',
         authorization: 'DPoP token',
         dpop: 'dpop-proof'
       },
-      body: ''
+      body: aclInsertBody()
     })
     const res = await handler(req, makeContext())
 
-    expect(res.status).toBe(405)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(res.headers.get('Content-Type')).toContain('application/json')
+    expect(await res.json()).toEqual({ path: '/foo/', rules: 2 })
+
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'PATCH',
+      path: '/foo/',
+      isAcl: true,
+      insertOnly: true
+    })
+    expect(mockSaveAcl).toHaveBeenCalledTimes(1)
+    const saved = mockSaveAcl.mock.calls[0]![0]
+    expect(saved.path).toBe('/foo/')
+    expect(saved.actor).toBe('https://alice.example/webid#me')
+    expect(saved.rules).toHaveLength(2)
+  })
+
+  it('PATCH /foo/.acl returns 404 when the scope has no authored grants', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: aclInsertBody()
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(404)
+    expect(mockSaveAcl).not.toHaveBeenCalled()
+  })
+
+  it('PATCH /foo/.acl returns 403 when authorizeRequest denies', async () => {
+    mockAuthorizeRequest.mockResolvedValueOnce({
+      allowed: false,
+      required: { target: 'control' },
+      granted: [],
+      ownerOverride: false
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: aclInsertBody()
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Forbidden')
+    expect(mockLoadAcl).not.toHaveBeenCalled()
+    expect(mockSaveAcl).not.toHaveBeenCalled()
+  })
+
+  it('PATCH /foo/.acl returns 415 for a non-text/n3 content type', async () => {
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/sparql-update',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: aclInsertBody()
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(415)
+    expect(mockLoadAcl).not.toHaveBeenCalled()
+    expect(mockSaveAcl).not.toHaveBeenCalled()
+  })
+
+  it('PATCH /foo/.acl returns 422 for a malformed patch body', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [],
+      authored: true
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: 'this is not valid n3'
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(422)
+    expect(mockSaveAcl).not.toHaveBeenCalled()
+  })
+
+  it('PATCH /foo/.acl with an already-present triple returns 200 changed:false without saving', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      authored: true
+    })
+
+    const noopBody = `@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+@prefix acl: <http://www.w3.org/ns/auth/acl#>.
+_:patch a solid:InsertDeletePatch;
+  solid:inserts {
+    <#authorization0> acl:accessTo <http://localhost/foo/>.
+  }.
+`
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body: noopBody
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(await res.json()).toEqual({ path: '/foo/', changed: false })
     expect(mockSaveAcl).not.toHaveBeenCalled()
   })
 })
