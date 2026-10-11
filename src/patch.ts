@@ -37,14 +37,21 @@ export interface ApplyInsertDeleteTurtlePatchOptions {
   existing: Uint8Array | null
 }
 
-export async function applyInsertDeleteTurtlePatch(
-  opts: ApplyInsertDeleteTurtlePatchOptions,
-): Promise<AppliedPatch> {
-  const baseIri = 'http://localhost/'
-  const patchText = text(opts.body)
-  const patchPrefixes = extractPrefixes(patchText)
+interface FormulaGraph {
+  present: boolean
+  nonEmpty: boolean
+  graphValue: string | null
+}
 
-  const patchParser = new Parser({ format: 'N3', baseIRI: baseIri })
+interface ParsedPatch {
+  patchStore: Store
+  where: FormulaGraph
+  deletes: FormulaGraph
+  inserts: FormulaGraph
+}
+
+function parsePatchBody(patchText: string): ParsedPatch {
+  const patchParser = new Parser({ format: 'N3', baseIRI: 'http://localhost/' })
   const patchStore = new Store()
   let patchQuads: Quad[]
   try {
@@ -90,7 +97,7 @@ export async function applyInsertDeleteTurtlePatch(
   const findFormulaGraph = (
     predicateIri: string,
     localName: string,
-  ): { present: boolean; nonEmpty: boolean; graphValue: string | null } => {
+  ): FormulaGraph => {
     let graphValue: string | null = null
     let count = 0
     for (const q of patchStore) {
@@ -128,9 +135,32 @@ export async function applyInsertDeleteTurtlePatch(
     return { present: true, nonEmpty, graphValue }
   }
 
-  const where = findFormulaGraph(SOLID_WHERE, 'where')
-  const deletes = findFormulaGraph(SOLID_DELETES, 'deletes')
-  const inserts = findFormulaGraph(SOLID_INSERTS, 'inserts')
+  return {
+    patchStore,
+    where: findFormulaGraph(SOLID_WHERE, 'where'),
+    deletes: findFormulaGraph(SOLID_DELETES, 'deletes'),
+    inserts: findFormulaGraph(SOLID_INSERTS, 'inserts'),
+  }
+}
+
+export async function patchIsInsertOnly(body: Uint8Array): Promise<boolean> {
+  try {
+    const { deletes } = parsePatchBody(text(body))
+    return !deletes.nonEmpty
+  } catch {
+    return false
+  }
+}
+
+export async function applyInsertDeleteTurtlePatch(
+  opts: ApplyInsertDeleteTurtlePatchOptions,
+): Promise<AppliedPatch> {
+  const baseIri = 'http://localhost/'
+  const patchText = text(opts.body)
+  const patchPrefixes = extractPrefixes(patchText)
+
+  const defaultGraph = DataFactory.defaultGraph()
+  const { patchStore, where, deletes, inserts } = parsePatchBody(patchText)
 
   if (where.nonEmpty) {
     throw new PatchValidationError(

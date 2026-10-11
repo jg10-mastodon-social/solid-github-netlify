@@ -17,6 +17,7 @@ import {
 } from "../../../src/github.js";
 import {
   applyInsertDeleteTurtlePatch,
+  patchIsInsertOnly,
   PatchValidationError,
   PatchConflictError,
   type AppliedPatch,
@@ -1024,11 +1025,14 @@ async function handlePatch(
     });
   }
 
+  const body = new Uint8Array(await req.arrayBuffer());
+  const insertOnly = await patchIsInsertOnly(body);
+
   const decision = await authorizeRequest({
     webId: authResult.payload.webid,
     method: "PATCH",
     path: `/${path}`,
-    insertOnly: false,
+    insertOnly,
   });
   if (!decision.allowed) {
     return new Response("Forbidden", { status: 403, headers: corsHeaders });
@@ -1055,8 +1059,6 @@ async function handlePatch(
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
   const branch = page ? `${page}-draft` : "draft";
-
-  const body = new Uint8Array(await req.arrayBuffer());
 
   let existing: Uint8Array | null = null;
   try {
@@ -1554,11 +1556,14 @@ async function handleChangelogMonthPatch(
     });
   }
 
+  const body = new Uint8Array(await req.arrayBuffer());
+  const insertOnly = await patchIsInsertOnly(body);
+
   const decision = await authorizeRequest({
     webId: authResult.payload.webid,
     method: "PATCH",
     path: `/${page}/history/changelog/${year}/${monthPadded}`,
-    insertOnly: false,
+    insertOnly,
   });
   if (!decision.allowed) {
     return new Response("Forbidden", { status: 403, headers: corsHeaders });
@@ -1578,8 +1583,6 @@ async function handleChangelogMonthPatch(
 
   const { githubRepo, githubToken, githubRef } = loadGithubConfig();
   const branch = page ? `${page}-draft` : "draft";
-
-  const body = new Uint8Array(await req.arrayBuffer());
 
   let existing: Uint8Array | null = null;
   try {

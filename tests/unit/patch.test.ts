@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   applyInsertDeleteTurtlePatch,
+  patchIsInsertOnly,
   PatchValidationError,
   PatchConflictError,
 } from '../../src/patch.js'
@@ -302,6 +303,40 @@ ex:alice ex:knows ex:bob .
         null,
       ),
     ).rejects.toBeInstanceOf(PatchConflictError)
+  })
+})
+
+describe('patchIsInsertOnly', () => {
+  it('returns true for an insert-only patch', async () => {
+    expect(await patchIsInsertOnly(bytes(patch('ex:alice ex:knows ex:bob .')))).toBe(true)
+  })
+
+  it('returns true when solid:deletes is absent', async () => {
+    expect(await patchIsInsertOnly(bytes(patch('ex:a ex:p ex:b .')))).toBe(true)
+  })
+
+  it('returns false for a patch containing deletes', async () => {
+    expect(
+      await patchIsInsertOnly(
+        bytes(patch('', { deletes: 'ex:alice ex:knows ex:carol' })),
+      ),
+    ).toBe(false)
+  })
+
+  it('returns false for a patch with both inserts and deletes', async () => {
+    expect(
+      await patchIsInsertOnly(
+        bytes(
+          patch('ex:eve ex:knows ex:alice .', {
+            deletes: 'ex:alice ex:knows ex:carol',
+          }),
+        ),
+      ),
+    ).toBe(false)
+  })
+
+  it('returns false for malformed N3', async () => {
+    expect(await patchIsInsertOnly(bytes('this is not valid n3'))).toBe(false)
   })
 })
 

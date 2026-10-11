@@ -1925,6 +1925,78 @@ ex:alice ex:knows ex:bob .
     expect(body.path).toBe('foo/data.ttl')
   })
 
+  it('passes insertOnly: true to authorizeRequest for an insert-only PATCH', async () => {
+    mockAuthorizeRequest.mockClear()
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .')
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    const call = mockAuthorizeRequest.mock.calls.find(
+      (c) => c[0]?.method === 'PATCH'
+    )
+    expect(call?.[0]).toMatchObject({ method: 'PATCH', insertOnly: true })
+  })
+
+  it('passes insertOnly: false to authorizeRequest for a PATCH containing deletes', async () => {
+    mockAuthorizeRequest.mockClear()
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody(`${PREFIXES}ex:alice ex:knows ex:carol .\n`),
+      contentType: 'text/turtle; charset=utf-8',
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:eve ex:knows ex:alice .', {
+        deletes: 'ex:alice ex:knows ex:carol'
+      })
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    const call = mockAuthorizeRequest.mock.calls.find(
+      (c) => c[0]?.method === 'PATCH'
+    )
+    expect(call?.[0]).toMatchObject({ method: 'PATCH', insertOnly: false })
+  })
+
   it('fetches the existing file from the draft branch and commits the merged turtle', async () => {
     const existing = `${PREFIXES}ex:alice ex:knows ex:carol .\n`
     mockFetchFileFromGitHub.mockResolvedValueOnce({
