@@ -231,7 +231,7 @@ describe('applyEdit', () => {
   it('bumps rev, stamps the actor and writes with the etag precondition', async () => {
     const doc = policyDoc({ rev: 4 })
     const store = new FakeStore({ [POLICY_KEY]: doc })
-    const nextRulesets = { rs_next: [{ subject: { class: 'public' }, modes: ['read'] }] }
+    const nextRulesets = { rs_next: [{ subject: { class: 'public' }, modes: ['read'] }] as Rule[] }
     const mutate = (current: PolicyDoc): PolicyDoc => ({ ...current, rulesets: nextRulesets })
 
     const result = await applyEdit(store, 'https://alice.example/profile#me', mutate, {

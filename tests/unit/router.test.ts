@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Context } from '@netlify/functions'
 import { verifyDpopToken } from '../../src/auth.js'
+import type { Rule } from '../../src/wac/evaluate.js'
 
 vi.mock('../../src/auth.js', () => ({
   verifyDpopToken: vi.fn().mockResolvedValue({
@@ -32,7 +33,7 @@ const mockLoadAcl = vi.fn(
     Promise.resolve({
       scopeKey: input.path,
       resourceUri: input.resourceUri,
-      rules: [],
+      rules: [] as Rule[],
       authored: false
     })
 )
@@ -7213,7 +7214,13 @@ describe('router ACL resource routes', () => {
     mockVerifyDpopToken.mockReset()
     mockVerifyDpopToken.mockResolvedValue({
       success: true,
-      payload: { webid: 'https://alice.example/webid#me' }
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        client_id: 'https://app.example/client',
+        iss: 'https://op.example',
+        iat: 1700000000,
+        exp: 4700000000
+      }
     })
     mockAuthorizeRequest.mockReset()
     mockAuthorizeRequest.mockResolvedValue({
@@ -7246,7 +7253,7 @@ describe('router ACL resource routes', () => {
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
       authored: true
     })
 
@@ -7477,7 +7484,7 @@ _:patch a solid:InsertDeletePatch;
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
       authored: true
     })
 
@@ -7601,7 +7608,7 @@ _:patch a solid:InsertDeletePatch;
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
       authored: true
     })
 
@@ -7637,7 +7644,13 @@ describe('router GET ACL audit ledger', () => {
     mockVerifyDpopToken.mockReset()
     mockVerifyDpopToken.mockResolvedValue({
       success: true,
-      payload: { webid: 'https://alice.example/webid#me' }
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        client_id: 'https://app.example/client',
+        iss: 'https://op.example',
+        iat: 1700000000,
+        exp: 4700000000
+      }
     })
     mockAuthorizeRequest.mockReset()
     mockAuthorizeRequest.mockResolvedValue({
@@ -7812,7 +7825,7 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
     mockLoadAcl.mockResolvedValue({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' }, modes: ['read'] }],
+      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
       authored: true
     })
     mockSaveAcl.mockReset()
@@ -7961,7 +7974,13 @@ describe('router advertises the ACL resource via Link on GET', () => {
     mockVerifyDpopToken.mockReset()
     mockVerifyDpopToken.mockResolvedValue({
       success: true,
-      payload: { webid: 'https://alice.example/webid#me' }
+      payload: {
+        webid: 'https://alice.example/webid#me',
+        client_id: 'https://app.example/client',
+        iss: 'https://op.example',
+        iat: 1700000000,
+        exp: 4700000000
+      }
     })
     mockAuthorizeRequest.mockReset()
     mockAuthorizeRequest.mockResolvedValue({

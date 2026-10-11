@@ -1328,7 +1328,7 @@ async function handleChangelogRootGet(
 
   const wacAllow = formatWacAllow(
     await wacAllowRequest({
-      webId: authResult?.payload?.webid,
+      webId: authResult && authResult.success ? authResult.payload.webid : undefined,
       path: `/${page}/history/changelog/`,
     }),
   );
@@ -1600,7 +1600,7 @@ async function handleChangelogMonthGet(
 
   const wacAllow = formatWacAllow(
     await wacAllowRequest({
-      webId: authResult?.payload?.webid,
+      webId: authResult && authResult.success ? authResult.payload.webid : undefined,
       path: `/${page}/history/changelog/${year}/${monthPadded}`,
     }),
   );
@@ -2117,7 +2117,7 @@ async function handleGet(
       authResult = await verifyDpopToken(authHeader, dpopHeader, req.url, "GET", []);
     }
     wacAllow = formatWacAllow(
-      await wacAllowRequest({ webId: authResult?.payload?.webid, path: `/${path}` }),
+      await wacAllowRequest({ webId: authResult && authResult.success ? authResult.payload.webid : undefined, path: `/${path}` }),
     );
   }
 

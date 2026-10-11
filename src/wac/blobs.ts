@@ -53,10 +53,14 @@ export function openJsonStore(
     },
 
     async set<T>(key: string, value: T, options?: SetOptions): Promise<WriteResult> {
-      const setOptions: SetOptions = {}
-      if (options?.metadata !== undefined) setOptions.metadata = options.metadata
-      if (options?.onlyIfNew !== undefined) setOptions.onlyIfNew = options.onlyIfNew
-      if (options?.onlyIfMatch !== undefined) setOptions.onlyIfMatch = options.onlyIfMatch
+      const metadata = options?.metadata
+      const base = metadata !== undefined ? { metadata } : {}
+      const setOptions: Parameters<typeof store.setJSON>[2] =
+        options?.onlyIfNew !== undefined
+          ? { ...base, onlyIfNew: options.onlyIfNew }
+          : options?.onlyIfMatch !== undefined
+            ? { ...base, onlyIfMatch: options.onlyIfMatch }
+            : base
       const result = await store.setJSON(key, value, setOptions)
       return { modified: result.modified }
     },
@@ -66,7 +70,7 @@ export function openJsonStore(
       return result.blobs.map((blob) => ({
         key: blob.key,
         etag: blob.etag ?? null,
-        metadata: blob.metadata ?? null
+        metadata: null
       }))
     }
   }

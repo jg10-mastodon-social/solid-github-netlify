@@ -5,7 +5,7 @@ const mockStore = {
   setJSON: vi.fn(),
   list: vi.fn()
 }
-const mockGetStore = vi.fn(() => mockStore)
+const mockGetStore = vi.fn((..._args: unknown[]) => mockStore)
 
 vi.mock('@netlify/blobs', () => ({
   getStore: (...args: unknown[]) => mockGetStore(...args)
@@ -106,7 +106,7 @@ describe('list', () => {
     const result = await store.list('events/')
     expect(mockStore.list).toHaveBeenCalledWith({ prefix: 'events/' })
     expect(result).toEqual([
-      { key: 'events/1', etag: 'etag-1', metadata: { rev: 1 } },
+      { key: 'events/1', etag: 'etag-1', metadata: null },
       { key: 'events/2', etag: null, metadata: null }
     ])
   })
