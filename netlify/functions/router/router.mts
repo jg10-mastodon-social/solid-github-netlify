@@ -971,8 +971,8 @@ async function handlePut(
   const decision = await authorizeRequest({
     webId: authResult.payload.webid,
     method: "PUT",
-    path: `/${path}`,
-    containerPath: parentContainerPath(`/${path}`),
+    path: pathname,
+    containerPath: parentContainerPath(pathname),
     exists,
   });
   if (!decision.allowed) {
@@ -1148,7 +1148,7 @@ async function handlePatch(
   const decision = await authorizeRequest({
     webId: authResult.payload.webid,
     method: "PATCH",
-    path: `/${path}`,
+    path: pathname,
     insertOnly,
   });
   if (!decision.allowed) {
@@ -2121,7 +2121,7 @@ async function handleGet(
       authResult = await verifyDpopToken(authHeader, dpopHeader, req.url, "GET", []);
     }
     wacAllow = formatWacAllow(
-      await wacAllowRequest({ webId: authResult && authResult.success ? authResult.payload.webid : undefined, path: `/${path}` }),
+      await wacAllowRequest({ webId: authResult && authResult.success ? authResult.payload.webid : undefined, path: pathname }),
     );
   }
 

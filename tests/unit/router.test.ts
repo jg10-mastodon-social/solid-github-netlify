@@ -628,6 +628,35 @@ describe('router PUT commit flow', () => {
     )
   })
 
+  it('authorizes the draft against the draft URL and its ancestor container', async () => {
+    mockAuthorizeRequest.mockClear()
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: '{}'
+    })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'PUT',
+      path: '/foo/history/draft/bar',
+      containerPath: '/foo/history/draft/',
+      exists: false
+    })
+  })
+
   it('returns 400 when the assembled path is unsafe', async () => {
     mockIsPathSafe.mockReturnValueOnce(false)
 
@@ -1153,7 +1182,7 @@ describe('router WAC-Allow on draft GET', () => {
     expect(vary).toContain('DPoP')
   })
 
-  it('derives WAC-Allow from the effective policy for the logical draft path', async () => {
+  it('derives WAC-Allow from the effective policy for the draft URL', async () => {
     mockWacAllowRequest.mockResolvedValueOnce({
       user: ['read', 'write'],
       public: ['append']
@@ -1171,7 +1200,62 @@ describe('router WAC-Allow on draft GET', () => {
     expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="append"')
     expect(mockWacAllowRequest).toHaveBeenCalledWith({
       webId: 'https://alice.example/webid#me',
-      path: '/foo/bar'
+      path: '/foo/history/draft/bar'
+    })
+  })
+
+  it('resolves the draft file policy path to the draft URL, not the logical content path', async () => {
+    mockWacAllowRequest.mockClear()
+    mockWacAllowRequest.mockResolvedValueOnce({ user: ['read'], public: [] })
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(mockWacAllowRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      path: '/foo/history/draft/bar'
+    })
+  })
+
+  it('resolves the draft container policy path to the draft URL container', async () => {
+    mockWacAllowRequest.mockClear()
+    mockWacAllowRequest.mockResolvedValueOnce({ user: ['read'], public: [] })
+    mockListDirectoryFromGitHub.mockReset()
+    mockListDirectoryFromGitHub.mockResolvedValueOnce({ status: 200, entries: [] })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext({ params: { page: 'foo' } }))
+
+    expect(mockWacAllowRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      path: '/foo/history/draft/'
+    })
+  })
+
+  it('resolves a root-level draft policy path to its draft URL', async () => {
+    mockWacAllowRequest.mockClear()
+    mockWacAllowRequest.mockResolvedValueOnce({ user: ['read'], public: [] })
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/history/draft/bar', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    await handler(req, makeContext({ params: { doc: 'bar' } }))
+
+    expect(mockWacAllowRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      path: '/history/draft/bar'
     })
   })
 
@@ -1937,6 +2021,43 @@ ex:alice ex:knows ex:bob .
     expect(body.commit).toBe('commit-sha')
     expect(body.branch).toBe('foo-draft')
     expect(body.path).toBe('foo/data.ttl')
+  })
+
+  it('authorizes the PATCH against the draft URL, not the logical content path', async () => {
+    mockAuthorizeRequest.mockClear()
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody(''),
+      contentType: null,
+      etag: null,
+      cacheControl: null
+    })
+    mockCommitFileOnBranch.mockResolvedValueOnce({
+      commitSha: 'commit-sha',
+      htmlUrl: 'https://github.com/octocat/hello-world/commit/abc',
+      branch: 'foo-draft',
+      contentSha: 'new-blob'
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/data.ttl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop'
+      },
+      body: patchBody('ex:alice ex:knows ex:bob .')
+    })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'data.ttl' } }))
+
+    expect(res.status).toBe(200)
+    expect(mockAuthorizeRequest).toHaveBeenCalledWith({
+      webId: 'https://alice.example/webid#me',
+      method: 'PATCH',
+      path: '/foo/history/draft/data.ttl',
+      insertOnly: true
+    })
   })
 
   it('passes insertOnly: true to authorizeRequest for an insert-only PATCH', async () => {
