@@ -7298,10 +7298,49 @@ describe('router ACL resource routes', () => {
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
     expect(res.headers.get('Link')).toBeNull()
-    expect(res.headers.get('WAC-Allow')).toBeNull()
     const body = await res.text()
     expect(body).toContain('acl:accessTo <http://localhost/foo/>')
     expect(body).toContain('acl:agentClass foaf:Agent')
+  })
+
+  it('GET /foo/.acl advertises WAC-Allow user="append control read write" without public when the public lacks control', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      authored: true
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe('user="append control read write"')
+  })
+
+  it('GET /foo/.acl includes public="append control read write" when the ruleset grants control to the public', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      rules: [{ subject: { class: 'public' as const }, modes: ['control'] }],
+      authored: true
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'GET',
+      headers: { authorization: 'DPoP token', dpop: 'dpop-proof' }
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBe(
+      'user="append control read write", public="append control read write"'
+    )
   })
 
   it('authorizes the ACL GET against the derived scope with isAcl', async () => {
@@ -7336,6 +7375,7 @@ describe('router ACL resource routes', () => {
     const res = await handler(req, makeContext())
 
     expect(res.status).toBe(404)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
   })
 
   it('GET /foo/.acl returns 403 when authorizeRequest denies', async () => {
@@ -7355,6 +7395,7 @@ describe('router ACL resource routes', () => {
 
     expect(res.status).toBe(403)
     expect(await res.text()).toBe('Forbidden')
+    expect(res.headers.get('WAC-Allow')).toBeNull()
     expect(mockLoadAcl).not.toHaveBeenCalled()
   })
 
@@ -7373,6 +7414,7 @@ describe('router ACL resource routes', () => {
     const res = await handler(req, makeContext())
 
     expect(res.status).toBe(401)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
     expect(mockAuthorizeRequest).not.toHaveBeenCalled()
     expect(mockLoadAcl).not.toHaveBeenCalled()
   })
@@ -8010,7 +8052,7 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 
-  it('.acl GET: no WAC-Allow, no-store', async () => {
+  it('.acl GET: WAC-Allow present, no-store', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/.acl', {
       method: 'GET',
@@ -8020,7 +8062,7 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
 
     expect(res.status).toBe(200)
     assertCacheInvariant(res)
-    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(res.headers.get('WAC-Allow')).toBe('user="append control read write"')
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
 })

@@ -51,6 +51,7 @@ import {
   listAclAudit,
 } from "../../../src/wac/runtime.js";
 import { rulesToTurtle, turtleToRules } from "../../../src/wac/serialize.js";
+import { grantedModes } from "../../../src/wac/evaluate.js";
 import { parentContainerPath } from "../../../src/wac/authorize.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
 
@@ -666,15 +667,21 @@ async function handleAclGet(
     rules: view.rules,
   });
 
-  return new Response(body, {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "text/turtle; charset=utf-8",
-      "Cache-Control": DRAFT_CACHE_CONTROL,
-      "Netlify-CDN-Cache-Control": NETLIFY_CDN_CACHE_CONTROL,
-    },
+  const controlClosure = ["append", "control", "read", "write"];
+  const wacAllow = formatWacAllow({
+    user: controlClosure,
+    public: grantedModes(view.rules, {}).has("control") ? controlClosure : [],
   });
+
+  const headers: Record<string, string> = {
+    ...corsHeaders,
+    "Content-Type": "text/turtle; charset=utf-8",
+    "Cache-Control": DRAFT_CACHE_CONTROL,
+    "Netlify-CDN-Cache-Control": NETLIFY_CDN_CACHE_CONTROL,
+  };
+  if (wacAllow) headers["WAC-Allow"] = wacAllow;
+
+  return new Response(body, { status: 200, headers });
 }
 
 async function handleAclPut(
