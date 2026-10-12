@@ -2323,9 +2323,11 @@ async function handleFileGet(ctx: FileGetContext): Promise<Response> {
     }
     if (ctx.draft) {
       applyDraftHeaders(headers, ctx);
-    } else {
+    } else if (result.status === 200 || result.status === 304) {
       headers["Cache-Control"] = PUBLIC_CACHE_CONTROL;
       headers["Netlify-CDN-Cache-Control"] = PUBLIC_CDN_CACHE_CONTROL;
+    } else {
+      headers["Cache-Control"] = "no-store";
     }
 
     const body = result.status === 304 ? null : (result.body as BodyInit);

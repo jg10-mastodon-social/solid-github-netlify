@@ -7866,6 +7866,44 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toContain('public')
   })
 
+  it('public file GET 200: exact public edge-cache headers', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('ok'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=60')
+    expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe(
+      'public, durable, max-age=60, stale-while-revalidate=86400'
+    )
+  })
+
+  it('public file GET 404: no-store and no public CDN cache header', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 404,
+      body: textBody('Not Found'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/missing', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'missing' } }))
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+    expect(res.headers.get('Netlify-CDN-Cache-Control') ?? '').not.toContain('public')
+  })
+
   it('public container GET: no WAC-Allow, cacheable', async () => {
     mockListDirectoryFromGitHub.mockResolvedValueOnce({
       status: 200,
