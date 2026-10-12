@@ -40,6 +40,8 @@ export async function bootstrapPolicy(
     subject: { type: 'webid', id },
     modes: ['read', 'write', 'control'] as Mode[]
   }))
+  const publicReadRule: Rule = { subject: { class: 'public' }, modes: ['read'] }
+  const rootRules: Rule[] = [...ownerRules, publicReadRule]
   const doc: PolicyDoc = {
     schema: POLICY_SCHEMA,
     rev: 0,
@@ -49,8 +51,8 @@ export async function bootstrapPolicy(
       '': { self: 'rs_root_self', default: 'rs_root_default' }
     },
     rulesets: {
-      rs_root_self: ownerRules,
-      rs_root_default: ownerRules
+      rs_root_self: rootRules,
+      rs_root_default: rootRules
     }
   }
 

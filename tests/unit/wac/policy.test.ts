@@ -144,9 +144,19 @@ describe('bootstrapPolicy', () => {
       subject: { type: 'webid', id },
       modes: ['read', 'write', 'control']
     }))
-    expect(doc.rulesets.rs_root_self).toEqual(ownerRules)
-    expect(doc.rulesets.rs_root_default).toEqual(ownerRules)
+    const publicRule = { subject: { class: 'public' }, modes: ['read'] }
+    expect(doc.rulesets.rs_root_self).toEqual([...ownerRules, publicRule])
+    expect(doc.rulesets.rs_root_default).toEqual([...ownerRules, publicRule])
     expect(etag).toBe('etag-1')
+  })
+
+  it('seeds a public-read rule in both root rulesets', async () => {
+    const store = new FakeStore()
+    const { doc } = await bootstrapPolicy(store, ['https://alice.example/profile#me'])
+
+    for (const ruleset of [doc.rulesets.rs_root_self, doc.rulesets.rs_root_default]) {
+      expect(ruleset).toContainEqual({ subject: { class: 'public' }, modes: ['read'] })
+    }
   })
 
   it('writes with onlyIfNew and rev metadata', async () => {

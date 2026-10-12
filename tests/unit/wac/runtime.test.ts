@@ -166,29 +166,38 @@ describe('authorizeRequest', () => {
     expect(result.ownerOverride).toBe(true)
   })
 
-  it('denies a non-owner WebID with no matching grant', async () => {
-    const result = await authorizeRequest({
+  it('allows a non-owner WebID to read via the public rule but denies a write', async () => {
+    const read = await authorizeRequest({
       webId: stranger,
       method: 'GET',
       path: '/notes.ttl'
     })
-    expect(result.allowed).toBe(false)
-    expect(result.ownerOverride).toBe(false)
+    expect(read.allowed).toBe(true)
+    expect(read.ownerOverride).toBe(false)
+
+    const write = await authorizeRequest({
+      webId: stranger,
+      method: 'PUT',
+      path: '/notes.ttl',
+      exists: true
+    })
+    expect(write.allowed).toBe(false)
+    expect(write.ownerOverride).toBe(false)
   })
 })
 
 describe('wacAllowRequest', () => {
-  it('grants the owner read/write/control on the bootstrapped root scope with no public modes', async () => {
+  it('grants the owner read/write/control and everyone public read on the bootstrapped root scope', async () => {
     const result = await wacAllowRequest({ webId: owner, path: '/' })
 
     expect(result.user).toEqual(['control', 'read', 'write'])
-    expect(result.public).toEqual([])
+    expect(result.public).toEqual(['read'])
   })
 
-  it('reports user equal to public for an anonymous caller', async () => {
+  it('reports public read and user equal to public for an anonymous caller', async () => {
     const result = await wacAllowRequest({ path: '/' })
 
-    expect(result.public).toEqual([])
+    expect(result.public).toEqual(['read'])
     expect(result.user).toEqual(result.public)
   })
 })
