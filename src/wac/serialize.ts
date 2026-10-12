@@ -4,8 +4,8 @@ import type { Mode, Rule, Subject } from './evaluate.js'
 
 export interface AclDocumentOptions {
   resourceUri: string
-  accessPredicate: 'accessTo' | 'default'
-  rules: Rule[]
+  accessTo: Rule[]
+  default: Rule[]
 }
 
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
@@ -58,7 +58,6 @@ function subjectLine(subject: Subject): string {
 }
 
 export function rulesToTurtle(options: AclDocumentOptions): string {
-  const predicate = options.accessPredicate === 'default' ? 'acl:default' : 'acl:accessTo'
   const lines = [
     `@prefix acl: <${ACL}>.`,
     `@prefix foaf: <${FOAF}>.`,
@@ -66,14 +65,21 @@ export function rulesToTurtle(options: AclDocumentOptions): string {
     ''
   ]
 
-  options.rules.forEach((rule, index) => {
-    if (index > 0) lines.push('')
-    const modes = sortModes(rule.modes).map((mode) => `acl:${MODE_TO_IRI[mode].slice(ACL.length)}`)
-    lines.push(`<#authorization${index}> a acl:Authorization;`)
-    lines.push(`    ${predicate} <${options.resourceUri}>;`)
-    lines.push(`    ${subjectLine(rule.subject)};`)
-    lines.push(`    acl:mode ${modes.join(', ')}.`)
-  })
+  let index = 0
+  const emit = (predicate: string, rules: Rule[]): void => {
+    for (const rule of rules) {
+      if (index > 0) lines.push('')
+      const modes = sortModes(rule.modes).map((mode) => `acl:${MODE_TO_IRI[mode].slice(ACL.length)}`)
+      lines.push(`<#authorization${index}> a acl:Authorization;`)
+      lines.push(`    ${predicate} <${options.resourceUri}>;`)
+      lines.push(`    ${subjectLine(rule.subject)};`)
+      lines.push(`    acl:mode ${modes.join(', ')}.`)
+      index += 1
+    }
+  }
+
+  emit('acl:accessTo', options.accessTo)
+  emit('acl:default', options.default)
 
   return `${lines.join('\n')}\n`
 }
@@ -99,7 +105,13 @@ function subjectFrom(predicate: string, object: Term): Subject | null {
 
 const SUBJECT_PREDICATES = new Set([ACL_AGENT, ACL_AGENT_CLASS, ACL_AGENT_GROUP, ACL_ORIGIN])
 
-export function turtleToRules(turtle: string): Rule[] {
+interface ParsedAuthorization {
+  rules: Rule[]
+  hasAccessTo: boolean
+  hasDefault: boolean
+}
+
+function parseAuthorizations(turtle: string): ParsedAuthorization[] {
   const parser = new Parser({ format: 'text/turtle', baseIRI: 'http://localhost/' })
   let quads: Quad[]
   try {
@@ -109,19 +121,22 @@ export function turtleToRules(turtle: string): Rule[] {
   }
   const store = new Store(quads)
 
-  const authorizationIds = new Set<string>()
+  const authorizationIds: string[] = []
+  const seen = new Set<string>()
   for (const quad of quads) {
     if (
       quad.predicate.value === RDF_TYPE &&
       quad.object.termType === 'NamedNode' &&
       quad.object.value === ACL_AUTHORIZATION &&
-      quad.subject.termType === 'NamedNode'
+      quad.subject.termType === 'NamedNode' &&
+      !seen.has(quad.subject.value)
     ) {
-      authorizationIds.add(quad.subject.value)
+      seen.add(quad.subject.value)
+      authorizationIds.push(quad.subject.value)
     }
   }
 
-  const rules: Rule[] = []
+  const parsed: ParsedAuthorization[] = []
   for (const id of authorizationIds) {
     const subject = DataFactory.namedNode(id)
     const modes = new Set<Mode>()
@@ -134,15 +149,34 @@ export function turtleToRules(turtle: string): Rule[] {
 
     for (const predicate of SUBJECT_PREDICATES) {
       for (const quad of store.getQuads(subject, DataFactory.namedNode(predicate), null, null)) {
-        const parsed = subjectFrom(predicate, quad.object)
-        if (parsed !== null) subjects.push(parsed)
+        const parsedSubject = subjectFrom(predicate, quad.object)
+        if (parsedSubject !== null) subjects.push(parsedSubject)
       }
     }
 
     if (subjects.length === 0) continue
     const sorted = sortModes(modes)
-    for (const parsed of subjects) rules.push({ subject: parsed, modes: [...sorted] })
+    parsed.push({
+      rules: subjects.map((parsedSubject) => ({ subject: parsedSubject, modes: [...sorted] })),
+      hasAccessTo: store.getQuads(subject, DataFactory.namedNode(ACL_ACCESS_TO), null, null).length > 0,
+      hasDefault: store.getQuads(subject, DataFactory.namedNode(ACL_DEFAULT), null, null).length > 0
+    })
   }
 
-  return rules
+  return parsed
+}
+
+export interface AclParseResult {
+  accessTo: Rule[]
+  default: Rule[]
+}
+
+export function turtleToAcl(turtle: string): AclParseResult {
+  const accessTo: Rule[] = []
+  const defaultRules: Rule[] = []
+  for (const authorization of parseAuthorizations(turtle)) {
+    if (authorization.hasAccessTo) accessTo.push(...authorization.rules)
+    if (authorization.hasDefault) defaultRules.push(...authorization.rules)
+  }
+  return { accessTo, default: defaultRules }
 }

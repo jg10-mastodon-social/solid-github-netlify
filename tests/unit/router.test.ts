@@ -33,7 +33,8 @@ const mockLoadAcl = vi.fn(
     Promise.resolve({
       scopeKey: input.path,
       resourceUri: input.resourceUri,
-      rules: [] as Rule[],
+      accessTo: [] as Rule[],
+      default: [] as Rule[],
       authored: false
     })
 )
@@ -7385,7 +7386,8 @@ describe('router ACL resource routes', () => {
         Promise.resolve({
           scopeKey: input.path,
           resourceUri: input.resourceUri,
-          rules: [],
+          accessTo: [],
+          default: [],
           authored: false
         })
     )
@@ -7399,11 +7401,12 @@ describe('router ACL resource routes', () => {
     expect(config.path).toContain('/:page*/.acl')
   })
 
-  it('GET /foo/.acl returns 200 Turtle without an acl Link and no-store when authored', async () => {
+  it('GET /foo/.acl returns 200 Turtle with both predicates and no-store when authored', async () => {
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      default: [{ subject: { class: 'authenticated' as const }, modes: ['append'] }],
       authored: true
     })
 
@@ -7421,14 +7424,17 @@ describe('router ACL resource routes', () => {
     expect(res.headers.get('Link')).toBeNull()
     const body = await res.text()
     expect(body).toContain('acl:accessTo <http://localhost/foo/>')
+    expect(body).toContain('acl:default <http://localhost/foo/>')
     expect(body).toContain('acl:agentClass foaf:Agent')
+    expect(body).toContain('acl:agentClass acl:AuthenticatedAgent')
   })
 
   it('GET /foo/.acl advertises WAC-Allow user="append control read write" without public when the public lacks control', async () => {
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      default: [],
       authored: true
     })
 
@@ -7447,7 +7453,8 @@ describe('router ACL resource routes', () => {
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' as const }, modes: ['control'] }],
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['control'] }],
+      default: [],
       authored: true
     })
 
@@ -7468,7 +7475,8 @@ describe('router ACL resource routes', () => {
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [],
+      accessTo: [],
+      default: [],
       authored: true
     })
 
@@ -7540,12 +7548,17 @@ describe('router ACL resource routes', () => {
     expect(mockLoadAcl).not.toHaveBeenCalled()
   })
 
-  it('PUT /foo/bar.acl saves the member scope and returns 200 JSON without an acl Link', async () => {
+  it('PUT /foo/bar.acl stores both accessTo and default grants and returns 200 JSON without an acl Link', async () => {
     const body = `@prefix acl: <http://www.w3.org/ns/auth/acl#>.
+@prefix foaf: <http://xmlns.com/foaf/0.1/>.
 <#auth> a acl:Authorization;
     acl:accessTo <http://localhost/foo/bar>;
     acl:agent <https://alice.example/webid#me>;
     acl:mode acl:Read, acl:Write.
+<#inherited> a acl:Authorization;
+    acl:default <http://localhost/foo/>;
+    acl:agentClass foaf:Agent;
+    acl:mode acl:Read.
 `
 
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
@@ -7564,7 +7577,7 @@ describe('router ACL resource routes', () => {
     expect(res.headers.get('Link')).toBeNull()
     expect(res.headers.get('Content-Type')).toContain('application/json')
     const json = await res.json()
-    expect(json).toEqual({ path: '/foo/bar', rules: 1 })
+    expect(json).toEqual({ path: '/foo/bar', rules: 2 })
 
     expect(mockAuthorizeRequest).toHaveBeenCalledWith({
       webId: 'https://alice.example/webid#me',
@@ -7576,7 +7589,8 @@ describe('router ACL resource routes', () => {
     const saved = mockSaveAcl.mock.calls[0]![0]
     expect(saved.path).toBe('/foo/bar')
     expect(saved.actor).toBe('https://alice.example/webid#me')
-    expect(saved.rules).toHaveLength(1)
+    expect(saved.accessTo).toHaveLength(1)
+    expect(saved.default).toHaveLength(1)
   })
 
   it('PUT /foo/bar.acl returns 403 on denial without saving', async () => {
@@ -7676,7 +7690,8 @@ _:patch a solid:InsertDeletePatch;
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      default: [],
       authored: true
     })
 
@@ -7708,7 +7723,50 @@ _:patch a solid:InsertDeletePatch;
     const saved = mockSaveAcl.mock.calls[0]![0]
     expect(saved.path).toBe('/foo/')
     expect(saved.actor).toBe('https://alice.example/webid#me')
-    expect(saved.rules).toHaveLength(2)
+    expect(saved.accessTo).toHaveLength(2)
+    expect(saved.default).toHaveLength(0)
+  })
+
+  it('PATCH /foo/.acl round-trips an inserted acl:default authorization', async () => {
+    mockLoadAcl.mockResolvedValueOnce({
+      scopeKey: '/foo/',
+      resourceUri: 'http://localhost/foo/',
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      default: [],
+      authored: true
+    })
+
+    const body = `@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+@prefix acl: <http://www.w3.org/ns/auth/acl#>.
+_:patch a solid:InsertDeletePatch;
+  solid:inserts {
+    <#auth-default> a acl:Authorization;
+      acl:default <http://localhost/foo/>;
+      acl:agent <https://alice.example/webid#me>;
+      acl:mode acl:Write.
+  }.
+`
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/.acl', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'text/n3',
+        authorization: 'DPoP token',
+        dpop: 'dpop-proof'
+      },
+      body
+    })
+    const res = await handler(req, makeContext())
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ path: '/foo/', rules: 2 })
+
+    const saved = mockSaveAcl.mock.calls[0]![0]
+    expect(saved.accessTo).toHaveLength(1)
+    expect(saved.default).toEqual([
+      { subject: { type: 'webid', id: 'https://alice.example/webid#me' }, modes: ['write'] }
+    ])
   })
 
   it('PATCH /foo/.acl returns 404 when the scope has no authored grants', async () => {
@@ -7776,7 +7834,8 @@ _:patch a solid:InsertDeletePatch;
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [],
+      accessTo: [],
+      default: [],
       authored: true
     })
 
@@ -7800,7 +7859,8 @@ _:patch a solid:InsertDeletePatch;
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      default: [],
       authored: true
     })
 
@@ -8017,7 +8077,8 @@ describe('router caching invariant (edge-cacheable iff agent-independent)', () =
     mockLoadAcl.mockResolvedValue({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      accessTo: [{ subject: { class: 'public' as const }, modes: ['read'] }],
+      default: [],
       authored: true
     })
     mockSaveAcl.mockReset()
@@ -8223,7 +8284,8 @@ describe('router advertises the ACL resource via Link on GET', () => {
     mockLoadAcl.mockResolvedValue({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
-      rules: [],
+      accessTo: [],
+      default: [],
       authored: true
     })
   })

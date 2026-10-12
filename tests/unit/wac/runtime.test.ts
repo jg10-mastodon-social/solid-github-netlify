@@ -211,29 +211,33 @@ describe('loadAcl', () => {
     expect(view).toEqual({
       scopeKey: '/foo/',
       resourceUri,
-      rules: [],
+      accessTo: [],
+      default: [],
       authored: false
     })
   })
 })
 
 describe('saveAcl', () => {
-  it('persists rules and reports them as authored on reload', async () => {
+  it('persists accessTo and default rules and reports them as authored on reload', async () => {
     await loadEffectivePolicy()
-    const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+    const accessTo: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+    const defaultRules: Rule[] = [{ subject: { class: 'authenticated' }, modes: ['append'] }]
 
-    await saveAcl({ path: '/foo/', actor: owner, rules })
+    await saveAcl({ path: '/foo/', actor: owner, accessTo, default: defaultRules })
 
     const view = await loadAcl({ path: '/foo/', resourceUri })
     expect(view.authored).toBe(true)
-    expect(view.rules).toEqual(rules)
+    expect(view.accessTo).toEqual(accessTo)
+    expect(view.default).toEqual(defaultRules)
   })
 
-  it('appends exactly one audit event with matching scope, actor and ruleset id', async () => {
+  it('appends exactly one audit event with matching scope, actor and ruleset ids', async () => {
     await loadEffectivePolicy()
-    const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+    const accessTo: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+    const defaultRules: Rule[] = [{ subject: { class: 'authenticated' }, modes: ['append'] }]
 
-    await saveAcl({ path: '/foo/', actor: owner, rules })
+    await saveAcl({ path: '/foo/', actor: owner, accessTo, default: defaultRules })
 
     const auditStore = hoisted.getStore({ name: 'acl-audit' })
     const events = [...auditStore.entries.entries()]
@@ -243,7 +247,10 @@ describe('saveAcl', () => {
     expect(events).toHaveLength(1)
     expect(events[0].scope).toBe('/foo/')
     expect(events[0].actor).toBe(owner)
-    expect(events[0].after).toBe(rulesetId(rules))
+    expect(events[0].after).toEqual({
+      accessTo: rulesetId(accessTo),
+      default: rulesetId(defaultRules)
+    })
   })
 
   it('lists appended audit events from the default acl-audit store', async () => {
@@ -272,7 +279,7 @@ describe('saveAcl', () => {
     await loadEffectivePolicy()
     const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
 
-    await saveAcl({ path: '/bar/', actor: owner, rules })
+    await saveAcl({ path: '/bar/', actor: owner, accessTo: rules, default: rules })
 
     const custom = hoisted.getStore({ name: 'custom-acl' })
     expect(custom.entries.has('policy')).toBe(true)

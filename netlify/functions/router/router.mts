@@ -50,7 +50,7 @@ import {
   wacAllowRequest,
   listAclAudit,
 } from "../../../src/wac/runtime.js";
-import { rulesToTurtle, turtleToRules } from "../../../src/wac/serialize.js";
+import { rulesToTurtle, turtleToAcl } from "../../../src/wac/serialize.js";
 import { grantedModes } from "../../../src/wac/evaluate.js";
 import { parentContainerPath } from "../../../src/wac/authorize.js";
 import { REPO_START_YEAR } from "./repo-start-year.generated.mjs";
@@ -663,14 +663,14 @@ async function handleAclGet(
 
   const body = rulesToTurtle({
     resourceUri,
-    accessPredicate: "accessTo",
-    rules: view.rules,
+    accessTo: view.accessTo,
+    default: view.default,
   });
 
   const controlClosure = ["append", "control", "read", "write"];
   const wacAllow = formatWacAllow({
     user: controlClosure,
-    public: grantedModes(view.rules, {}).has("control") ? controlClosure : [],
+    public: grantedModes(view.accessTo, {}).has("control") ? controlClosure : [],
   });
 
   const headers: Record<string, string> = {
@@ -721,16 +721,19 @@ async function handleAclPut(
   }
 
   const body = await req.text();
-  const rules = turtleToRules(body);
-  await saveAcl({ path: scopeKey, actor: authResult.payload.webid, rules });
+  const { accessTo, default: defaultRules } = turtleToAcl(body);
+  await saveAcl({ path: scopeKey, actor: authResult.payload.webid, accessTo, default: defaultRules });
 
-  return new Response(JSON.stringify({ path: scopeKey, rules: rules.length }), {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "application/json",
+  return new Response(
+    JSON.stringify({ path: scopeKey, rules: accessTo.length + defaultRules.length }),
+    {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+      },
     },
-  });
+  );
 }
 
 async function handleAclPatch(
@@ -789,8 +792,8 @@ async function handleAclPatch(
 
   const existing = rulesToTurtle({
     resourceUri,
-    accessPredicate: "accessTo",
-    rules: view.rules,
+    accessTo: view.accessTo,
+    default: view.default,
   });
 
   let applied: AppliedPatch;
@@ -825,16 +828,19 @@ async function handleAclPatch(
     });
   }
 
-  const rules = turtleToRules(applied.content);
-  await saveAcl({ path: scopeKey, actor: authResult.payload.webid, rules });
+  const { accessTo, default: defaultRules } = turtleToAcl(applied.content);
+  await saveAcl({ path: scopeKey, actor: authResult.payload.webid, accessTo, default: defaultRules });
 
-  return new Response(JSON.stringify({ path: scopeKey, rules: rules.length }), {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "application/json",
+  return new Response(
+    JSON.stringify({ path: scopeKey, rules: accessTo.length + defaultRules.length }),
+    {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+      },
     },
-  });
+  );
 }
 
 async function handleAclAuditGet(

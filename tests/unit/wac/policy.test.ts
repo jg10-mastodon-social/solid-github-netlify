@@ -347,23 +347,38 @@ describe('rulesetId', () => {
 })
 
 describe('setScopeRules', () => {
-  const rules: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+  const accessTo: Rule[] = [{ subject: { class: 'public' }, modes: ['read'] }]
+  const defaultRules: Rule[] = [{ subject: { class: 'authenticated' }, modes: ['append'] }]
 
-  it('creates a new scope and ruleset without mutating the input', () => {
+  it('sets self and default rulesets independently without mutating the input', () => {
     const doc = policyDoc()
     const snapshot = JSON.parse(JSON.stringify(doc))
-    const id = rulesetId(rules)
+    const selfId = rulesetId(accessTo)
+    const defaultId = rulesetId(defaultRules)
 
-    const next = setScopeRules(doc, '/alice/', rules)
+    const next = setScopeRules(doc, '/alice/', { accessTo, default: defaultRules })
 
     expect(next).not.toBe(doc)
     expect(doc).toEqual(snapshot)
-    expect(next.scopes['/alice/']).toEqual({ self: id, default: id })
-    expect(next.rulesets[id]).toEqual(rules)
+    expect(next.scopes['/alice/']).toEqual({ self: selfId, default: defaultId })
+    expect(next.rulesets[selfId]).toEqual(accessTo)
+    expect(next.rulesets[defaultId]).toEqual(defaultRules)
+  })
+
+  it('accepts an empty default list and stores an empty ruleset', () => {
+    const doc = policyDoc()
+    const selfId = rulesetId(accessTo)
+    const emptyId = rulesetId([])
+
+    const next = setScopeRules(doc, '/alice/', { accessTo, default: [] })
+
+    expect(next.scopes['/alice/']).toEqual({ self: selfId, default: emptyId })
+    expect(next.rulesets[emptyId]).toEqual([])
   })
 
   it('updates an existing scope while preserving other scopes and rulesets', () => {
-    const id = rulesetId(rules)
+    const selfId = rulesetId(accessTo)
+    const defaultId = rulesetId(defaultRules)
     const doc = policyDoc({
       scopes: {
         '': { self: 'rs_root_self', default: 'rs_root_default' },
@@ -371,11 +386,11 @@ describe('setScopeRules', () => {
       }
     })
 
-    const next = setScopeRules(doc, '/alice/', rules)
+    const next = setScopeRules(doc, '/alice/', { accessTo, default: defaultRules })
 
     expect(next.scopes['']).toEqual({ self: 'rs_root_self', default: 'rs_root_default' })
-    expect(next.scopes['/alice/']).toEqual({ self: id, default: id })
+    expect(next.scopes['/alice/']).toEqual({ self: selfId, default: defaultId })
     expect(next.rulesets.rs_root_self).toEqual(doc.rulesets.rs_root_self)
-    expect(next.rulesets[id]).toEqual(rules)
+    expect(next.rulesets[selfId]).toEqual(accessTo)
   })
 })

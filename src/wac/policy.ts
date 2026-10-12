@@ -80,12 +80,22 @@ export function rulesetId(rules: Rule[]): string {
   return `rs_${hash.slice(0, 16)}`
 }
 
-export function setScopeRules(doc: PolicyDoc, scopeKey: string, rules: Rule[]): PolicyDoc {
-  const id = rulesetId(rules)
+export interface ScopeRules {
+  accessTo: Rule[]
+  default: Rule[]
+}
+
+export function setScopeRules(doc: PolicyDoc, scopeKey: string, rules: ScopeRules): PolicyDoc {
+  const selfId = rulesetId(rules.accessTo)
+  const defaultId = rulesetId(rules.default)
   return {
     ...doc,
-    scopes: { ...doc.scopes, [scopeKey]: { self: id, default: id } },
-    rulesets: { ...doc.rulesets, [id]: rules }
+    scopes: { ...doc.scopes, [scopeKey]: { self: selfId, default: defaultId } },
+    rulesets: {
+      ...doc.rulesets,
+      [selfId]: rules.accessTo,
+      [defaultId]: rules.default
+    }
   }
 }
 

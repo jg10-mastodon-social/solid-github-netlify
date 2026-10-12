@@ -423,9 +423,9 @@ An ACL resource is served under the WAC `acl` link relation and is gated by `con
 | Container `/:page*/` | `/:page*/.acl` |
 | Member `/:page*/:doc` | `/:page*/:doc.acl` |
 
-- `GET` returns the ACL resource as `text/turtle` (RDF), serialized from the stored JSON policy — the representation the spec requires.
-- `PUT` replaces the scope's authored grants; `PATCH` applies an N3 Patch (same ground-triples subset as the draft PATCH above).
-- `GET` on a path whose scope has no authored grants returns `404` (WAC: no representation, so the path inherits from its nearest ancestor).
+- `GET` returns the ACL resource as `text/turtle` (RDF), serialized from the stored JSON policy — the representation the spec requires. The representation distinguishes the scope's `self` grants, emitted as `acl:accessTo <scope resource>`, from its `default` grants, emitted as `acl:default <container>`; an authorization that carries both predicates is emitted once per predicate.
+- `PUT` replaces the scope's authored grants; `PATCH` applies an N3 Patch (same ground-triples subset as the draft PATCH above). Both parse `acl:accessTo` and `acl:default` independently, so the `self` and `default` rulesets can diverge.
+- `GET` on a path whose scope has no authored grants returns `404` (WAC: no representation, so the path inherits from its nearest ancestor). A container whose ACL has no `acl:default` grants nothing to its descendants — there is no fall-through to a higher ancestor.
 - `GET` responses carry `Link: <{acl URL}>; rel="acl"` (per the Solid Protocol, auxiliary resources are advertised on `GET`/`HEAD`).
 
 #### Caching and WAC-Allow

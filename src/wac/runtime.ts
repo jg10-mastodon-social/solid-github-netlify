@@ -56,7 +56,8 @@ export async function wacAllowRequest(input: {
 export interface AclView {
   scopeKey: string
   resourceUri: string
-  rules: Rule[]
+  accessTo: Rule[]
+  default: Rule[]
   authored: boolean
 }
 
@@ -68,18 +69,21 @@ export interface LoadAclInput {
 export interface SaveAclInput {
   path: string
   actor: string
-  rules: Rule[]
+  accessTo: Rule[]
+  default: Rule[]
 }
 
 export async function loadAcl(input: LoadAclInput): Promise<AclView> {
   const doc = await loadEffectivePolicy()
   const entry = doc.scopes[input.path]
-  const rules = entry === undefined ? [] : doc.rulesets[entry.self] ?? []
+  const accessTo = entry === undefined ? [] : doc.rulesets[entry.self] ?? []
+  const defaultRules = entry === undefined ? [] : doc.rulesets[entry.default] ?? []
 
   return {
     scopeKey: input.path,
     resourceUri: input.resourceUri,
-    rules,
+    accessTo,
+    default: defaultRules,
     authored: entry !== undefined
   }
 }
@@ -87,7 +91,9 @@ export async function loadAcl(input: LoadAclInput): Promise<AclView> {
 export async function saveAcl(input: SaveAclInput): Promise<void> {
   const { aclStore, aclAuditStore } = loadAclConfig()
   const store = openJsonStore(aclStore)
-  await applyEdit(store, input.actor, (doc) => setScopeRules(doc, input.path, input.rules))
+  await applyEdit(store, input.actor, (doc) =>
+    setScopeRules(doc, input.path, { accessTo: input.accessTo, default: input.default })
+  )
 
   const auditStore = openJsonStore(aclAuditStore)
   await appendEvent(auditStore, {
@@ -95,7 +101,10 @@ export async function saveAcl(input: SaveAclInput): Promise<void> {
     actor: input.actor,
     scope: input.path,
     op: 'replace',
-    after: rulesetId(input.rules)
+    after: {
+      accessTo: rulesetId(input.accessTo),
+      default: rulesetId(input.default)
+    }
   })
 }
 
