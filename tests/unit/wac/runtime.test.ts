@@ -190,7 +190,7 @@ describe('wacAllowRequest', () => {
   it('grants the owner read/write/control and everyone public read on the bootstrapped root scope', async () => {
     const result = await wacAllowRequest({ webId: owner, path: '/' })
 
-    expect(result.user).toEqual(['control', 'read', 'write'])
+    expect(result.user).toEqual(['append', 'control', 'read', 'write'])
     expect(result.public).toEqual(['read'])
   })
 

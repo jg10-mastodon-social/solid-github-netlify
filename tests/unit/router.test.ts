@@ -23,7 +23,7 @@ const mockWacAllowRequest = vi.fn(
   (input: { webId?: string; path: string }) =>
     Promise.resolve(
       input.webId === 'https://alice.example/webid#me'
-        ? { user: ['read', 'write'], public: ['read'] }
+        ? { user: ['append', 'read', 'write'], public: ['read'] }
         : { user: ['read'], public: ['read'] }
     )
 )
@@ -801,7 +801,7 @@ describe('router WAC-Allow on draft GET', () => {
     })
     const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
 
-    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('WAC-Allow')).toBe('user="append read write", public="read"')
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
@@ -1078,7 +1078,7 @@ describe('router WAC-Allow on draft GET', () => {
     const res = await handler(req, makeContext({ params: { page: 'blog', doc: 'home.html' } }))
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('WAC-Allow')).toBe('user="append read write", public="read"')
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
@@ -1173,6 +1173,19 @@ describe('router WAC-Allow on draft GET', () => {
       webId: 'https://alice.example/webid#me',
       path: '/foo/bar'
     })
+  })
+
+  it('omits WAC-Allow entirely when wacAllowRequest returns both groups empty', async () => {
+    mockWacAllowRequest.mockResolvedValueOnce({ user: [], public: [] })
+    mockFetchFileFromGitHub.mockResolvedValueOnce(okResult())
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(res.headers.get('Allow')).toBe('GET, PUT, OPTIONS')
   })
 })
 
@@ -3272,7 +3285,7 @@ describe('router GET container listing', () => {
     const res = await handler(req, makeContext({ params: { page: 'foo' } }))
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('WAC-Allow')).toBe('user="append read write", public="read"')
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
   })
@@ -5770,7 +5783,7 @@ describe('router changelog root GET advertises writable resource headers', () =>
     )
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('WAC-Allow')).toBe('user="append read write", public="read"')
   })
 
   it('returns WAC-Allow: user="read", public="read" for an anonymous request', async () => {
@@ -5785,6 +5798,22 @@ describe('router changelog root GET advertises writable resource headers', () =>
 
     expect(res.status).toBe(200)
     expect(res.headers.get('WAC-Allow')).toBe('user="read", public="read"')
+  })
+
+  it('omits WAC-Allow when wacAllowRequest returns both groups empty', async () => {
+    mockWacAllowRequest.mockResolvedValueOnce({ user: [], public: [] })
+    stubRootGet()
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/changelog/', { method: 'GET' })
+    const res = await handler(
+      req,
+      makeContext({ params: { page: 'foo', rest: 'changelog/' } })
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('WAC-Allow')).toBeNull()
+    expect(res.headers.get('Allow')).toBe('GET, POST, OPTIONS')
   })
 
   it('returns WAC-Allow: user="read", public="read" when only Authorization is present (no DPoP)', async () => {
@@ -6553,7 +6582,7 @@ describe('router changelog month GET', () => {
     expect(authRes.status).toBe(200)
     expect(await anonRes.text()).toBe(await authRes.text())
     expect(anonRes.headers.get('WAC-Allow')).toBe('user="read", public="read"')
-    expect(authRes.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(authRes.headers.get('WAC-Allow')).toBe('user="append read write", public="read"')
   })
 })
 
@@ -6681,7 +6710,7 @@ describe('router changelog month GET advertises writable resource headers', () =
     )
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('WAC-Allow')).toBe('user="read write", public="read"')
+    expect(res.headers.get('WAC-Allow')).toBe('user="append read write", public="read"')
   })
 
   it('returns WAC-Allow: user="read", public="read" for an anonymous request', async () => {

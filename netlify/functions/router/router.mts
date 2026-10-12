@@ -58,7 +58,10 @@ const DRAFT_SUFFIX = "/history/draft/";
 const CHANGELOG_SUFFIX = "/history/changelog/";
 
 function formatWacAllow(wac: { user: string[]; public: string[] }): string {
-  return `user="${wac.user.join(" ")}", public="${wac.public.join(" ")}"`;
+  const parts: string[] = [];
+  if (wac.user.length > 0) parts.push(`user="${wac.user.join(" ")}"`);
+  if (wac.public.length > 0) parts.push(`public="${wac.public.join(" ")}"`);
+  return parts.join(", ");
 }
 
 const DRAFT_CACHE_CONTROL = "private, no-store";
@@ -70,7 +73,7 @@ function applyDraftHeaders(
   headers: Record<string, string>,
   ctx: { wacAllow: string },
 ): void {
-  headers["WAC-Allow"] = ctx.wacAllow;
+  if (ctx.wacAllow) headers["WAC-Allow"] = ctx.wacAllow;
   headers["Allow"] = "GET, PUT, OPTIONS";
   headers["Accept-Put"] = "*/*";
   headers["Accept-Patch"] = "text/n3";
@@ -89,7 +92,7 @@ function applyChangelogHeaders(
     acceptPatch?: string;
   },
 ): void {
-  headers["WAC-Allow"] = ctx.wacAllow;
+  if (ctx.wacAllow) headers["WAC-Allow"] = ctx.wacAllow;
   headers["Allow"] = ctx.allow;
   if (ctx.acceptPost) headers["Accept-Post"] = ctx.acceptPost;
   if (ctx.acceptPatch) headers["Accept-Patch"] = ctx.acceptPatch;

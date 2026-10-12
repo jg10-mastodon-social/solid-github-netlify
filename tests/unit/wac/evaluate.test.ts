@@ -179,7 +179,21 @@ describe('wacAllow', () => {
 
   it('unions the agent modes with the public modes and sorts them', () => {
     const result = wacAllow(ruleset, { webId: 'https://alice.example/profile#me' })
-    expect(result).toEqual({ user: ['read', 'write'], public: ['read'] })
+    expect(result).toEqual({ user: ['append', 'read', 'write'], public: ['read'] })
+  })
+
+  it('reports append in a group whenever write is granted (acl:Append is a subclass of acl:Write)', () => {
+    const owner: Rule[] = [
+      {
+        subject: { type: 'webid', id: 'https://alice.example/profile#me' },
+        modes: ['read', 'write', 'control']
+      },
+      { subject: { class: 'public' }, modes: ['read'] }
+    ]
+    expect(wacAllow(owner, { webId: 'https://alice.example/profile#me' })).toEqual({
+      user: ['append', 'control', 'read', 'write'],
+      public: ['read']
+    })
   })
 
   it('reports the public modes under both user and public for anonymous callers', () => {
@@ -193,8 +207,8 @@ describe('wacAllow', () => {
       { subject: { class: 'authenticated' }, modes: ['control'] }
     ]
     expect(wacAllow(duplicated, { webId: 'https://alice.example/profile#me' })).toEqual({
-      user: ['control', 'read', 'write'],
-      public: ['read', 'write']
+      user: ['append', 'control', 'read', 'write'],
+      public: ['append', 'read', 'write']
     })
   })
 })

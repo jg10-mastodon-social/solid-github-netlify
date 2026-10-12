@@ -96,11 +96,17 @@ export function satisfies(granted: ReadonlySet<Mode>, required: Mode): boolean {
   return required === 'append' && granted.has('write')
 }
 
+function expandAppend(modes: ReadonlySet<Mode>): Mode[] {
+  const expanded = new Set(modes)
+  if (expanded.has('write')) expanded.add('append')
+  return sortModes(expanded)
+}
+
 export function wacAllow(ruleset: Rule[], ctx: AgentContext): { user: Mode[]; public: Mode[] } {
   const publicModes = grantedModes(ruleset, {})
   const userModes = grantedModes(ruleset, ctx)
   for (const mode of publicModes) userModes.add(mode)
-  return { user: sortModes(userModes), public: sortModes(publicModes) }
+  return { user: expandAppend(userModes), public: expandAppend(publicModes) }
 }
 
 export function requiredModes(opts: {
