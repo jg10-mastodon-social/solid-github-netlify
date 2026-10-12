@@ -7278,7 +7278,7 @@ describe('router ACL resource routes', () => {
     expect(config.path).toContain('/:page*/.acl')
   })
 
-  it('GET /foo/.acl returns 200 Turtle with an acl Link and no-store when authored', async () => {
+  it('GET /foo/.acl returns 200 Turtle without an acl Link and no-store when authored', async () => {
     mockLoadAcl.mockResolvedValueOnce({
       scopeKey: '/foo/',
       resourceUri: 'http://localhost/foo/',
@@ -7297,7 +7297,7 @@ describe('router ACL resource routes', () => {
     expect(res.headers.get('Content-Type')).toBe('text/turtle; charset=utf-8')
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(res.headers.get('Netlify-CDN-Cache-Control')).toBe('no-store')
-    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(res.headers.get('Link')).toBeNull()
     expect(res.headers.get('WAC-Allow')).toBeNull()
     const body = await res.text()
     expect(body).toContain('acl:accessTo <http://localhost/foo/>')
@@ -7377,7 +7377,7 @@ describe('router ACL resource routes', () => {
     expect(mockLoadAcl).not.toHaveBeenCalled()
   })
 
-  it('PUT /foo/bar.acl saves the member scope and returns 200 JSON with an acl Link', async () => {
+  it('PUT /foo/bar.acl saves the member scope and returns 200 JSON without an acl Link', async () => {
     const body = `@prefix acl: <http://www.w3.org/ns/auth/acl#>.
 <#auth> a acl:Authorization;
     acl:accessTo <http://localhost/foo/bar>;
@@ -7398,7 +7398,7 @@ describe('router ACL resource routes', () => {
     const res = await handler(req, makeContext())
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Link')).toBe('<http://localhost/foo/bar.acl>; rel="acl"')
+    expect(res.headers.get('Link')).toBeNull()
     expect(res.headers.get('Content-Type')).toContain('application/json')
     const json = await res.json()
     expect(json).toEqual({ path: '/foo/bar', rules: 1 })
@@ -7530,7 +7530,7 @@ _:patch a solid:InsertDeletePatch;
     const res = await handler(req, makeContext())
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(res.headers.get('Link')).toBeNull()
     expect(res.headers.get('Content-Type')).toContain('application/json')
     expect(await res.json()).toEqual({ path: '/foo/', rules: 2 })
 
@@ -7662,7 +7662,7 @@ _:patch a solid:InsertDeletePatch;
     const res = await handler(req, makeContext())
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(res.headers.get('Link')).toBeNull()
     expect(await res.json()).toEqual({ path: '/foo/', changed: false })
     expect(mockSaveAcl).not.toHaveBeenCalled()
   })
@@ -8108,7 +8108,7 @@ describe('router advertises the ACL resource via Link on GET', () => {
     expect(res.headers.get('Link')).toBe('<http://localhost/.acl>; rel="acl"')
   })
 
-  it('advertises the ACL resource itself on a .acl GET', async () => {
+  it('does not advertise a Link on a .acl GET', async () => {
     const { default: handler } = await import('../../netlify/functions/router/router.mts')
     const req = new Request('http://localhost/foo/.acl', {
       method: 'GET',
@@ -8117,7 +8117,26 @@ describe('router advertises the ACL resource via Link on GET', () => {
     const res = await handler(req, makeContext())
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Link')).toBe('<http://localhost/foo/.acl>; rel="acl"')
+    expect(res.headers.get('Link')).toBeNull()
+  })
+
+  it('advertises Link on a draft file GET', async () => {
+    mockFetchFileFromGitHub.mockResolvedValueOnce({
+      status: 200,
+      body: textBody('draft'),
+      contentType: 'text/plain',
+      etag: null,
+      cacheControl: null
+    })
+
+    const { default: handler } = await import('../../netlify/functions/router/router.mts')
+    const req = new Request('http://localhost/foo/history/draft/bar', { method: 'GET' })
+    const res = await handler(req, makeContext({ params: { page: 'foo', doc: 'bar' } }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Link')).toBe(
+      '<http://localhost/foo/history/draft/bar.acl>; rel="acl"'
+    )
   })
 
   it('exposes Link via Access-Control-Expose-Headers on the OPTIONS preflight', async () => {

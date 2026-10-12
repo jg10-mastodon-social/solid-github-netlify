@@ -121,7 +121,7 @@ export default async (req: Request, context: Context) => {
   const origin = new URL(req.url).origin;
   const pathname = new URL(req.url).pathname;
   const response = await route(req, context, pathname);
-  if (req.method === "GET") {
+  if (req.method === "GET" && !isAclRequest(pathname)) {
     response.headers.set("Link", `<${aclUrlFor(pathname, origin)}>; rel="acl"`);
   }
   return response;
@@ -606,19 +606,17 @@ function isAclRequest(pathname: string): boolean {
 interface AclScope {
   scopeKey: string;
   resourceUri: string;
-  aclUrl: string;
 }
 
 function deriveAclScope(pathname: string, origin: string): AclScope {
-  const aclUrl = `${origin}${pathname}`;
   const remainder = pathname.slice(0, -".acl".length);
 
   if (remainder === "" || remainder === "/") {
-    return { scopeKey: "", resourceUri: `${origin}/`, aclUrl };
+    return { scopeKey: "", resourceUri: `${origin}/` };
   }
 
   const scopeKey = remainder.startsWith("/") ? remainder : `/${remainder}`;
-  return { scopeKey, resourceUri: `${origin}${scopeKey}`, aclUrl };
+  return { scopeKey, resourceUri: `${origin}${scopeKey}` };
 }
 
 async function handleAclGet(
@@ -627,7 +625,7 @@ async function handleAclGet(
   pathname: string,
 ): Promise<Response> {
   const origin = new URL(req.url).origin;
-  const { scopeKey, resourceUri, aclUrl } = deriveAclScope(pathname, origin);
+  const { scopeKey, resourceUri } = deriveAclScope(pathname, origin);
 
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
@@ -675,7 +673,6 @@ async function handleAclGet(
       "Content-Type": "text/turtle; charset=utf-8",
       "Cache-Control": DRAFT_CACHE_CONTROL,
       "Netlify-CDN-Cache-Control": NETLIFY_CDN_CACHE_CONTROL,
-      Link: `<${aclUrl}>; rel="acl"`,
     },
   });
 }
@@ -686,7 +683,7 @@ async function handleAclPut(
   pathname: string,
 ): Promise<Response> {
   const origin = new URL(req.url).origin;
-  const { scopeKey, aclUrl } = deriveAclScope(pathname, origin);
+  const { scopeKey } = deriveAclScope(pathname, origin);
 
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
@@ -725,7 +722,6 @@ async function handleAclPut(
     headers: {
       ...corsHeaders,
       "Content-Type": "application/json",
-      Link: `<${aclUrl}>; rel="acl"`,
     },
   });
 }
@@ -736,7 +732,7 @@ async function handleAclPatch(
   pathname: string,
 ): Promise<Response> {
   const origin = new URL(req.url).origin;
-  const { scopeKey, resourceUri, aclUrl } = deriveAclScope(pathname, origin);
+  const { scopeKey, resourceUri } = deriveAclScope(pathname, origin);
 
   const authHeader = req.headers.get("authorization") ?? undefined;
   const dpopHeader = req.headers.get("dpop") ?? undefined;
@@ -818,7 +814,6 @@ async function handleAclPatch(
       headers: {
         ...corsHeaders,
         "Content-Type": "application/json",
-        Link: `<${aclUrl}>; rel="acl"`,
       },
     });
   }
@@ -831,7 +826,6 @@ async function handleAclPatch(
     headers: {
       ...corsHeaders,
       "Content-Type": "application/json",
-      Link: `<${aclUrl}>; rel="acl"`,
     },
   });
 }
